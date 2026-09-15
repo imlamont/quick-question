@@ -1,0 +1,92 @@
+# Build the Debian package whenever the debian (packaging) branch is pushed,
+# and publish it as a GitHub release.
+name: Debian package
+
+on:
+  push:
+    branches: [debian]
+
+permissions:
+  contents: write # create releases and their tags
+
+# Serialize runs so two quick pushes can't race to create the same release.
+concurrency:
+  group: debian-release
+  cancel-in-progress: false
+
+jobs:
+  deb:
+    name: Build and release quick-question .deb
+    # Built on 24.04 so the package installs on Ubuntu 24.04 and newer.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential debhelper lintian \
+            libcurl4-openssl-dev libcjson-dev python3
+
+      # The package version is <upstream>-<revision>; its upstream part must
+      # match QQ_VERSION.
+      - name: Check version consistency
+        run: |
+          deb_version=$(dpkg-parsechangelog -S Version)
+          upstream_version=${deb_version%-*}
+          src_version=$(sed -n 's/^#define QQ_VERSION "\(.*\)"$/\1/p' src/qq.h)
+          echo "debian/changelog: $deb_version (upstream $upstream_version), src/qq.h: $src_version"
+          if [ "$upstream_version" != "$src_version" ]; then
+            echo "::error::debian/changelog upstream version ($upstream_version) and QQ_VERSION ($src_version) differ"
+            exit 1
+          fi
+          {
+            echo "VERSION=$deb_version"
+            echo "DEB=quick-question_${deb_version}_$(dpkg --print-architecture).deb"
+          } >> "$GITHUB_ENV"
+
+      - name: Build package (runs the test suite)
+        run: dpkg-buildpackage -us -uc -b
+
+      # Check the .deb itself; the .changes file names the Ubuntu series the
+      # changelog targets, which this runner's older lintian may not know.
+      - name: Lintian
+        run: lintian --fail-on error --info "../$DEB"
+
+      - name: Collect package
+        run: |
+          mkdir -p dist
+          mv "../$DEB" dist/
+          dpkg-deb --info "dist/$DEB"
+          dpkg-deb --contents "dist/$DEB"
+
+      # One release per package version, tagged debian/<version> on the pushed
+      # commit. A push that doesn't bump debian/changelog still builds and
+      # lints above, but never replaces a published package.
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="debian/$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release $tag already exists; add a debian/changelog entry to publish a new package."
+            exit 0
+          fi
+          {
+            echo "Debian/Ubuntu (amd64) package of quick-question $VERSION, built on Ubuntu 24.04."
+            echo
+            echo '```sh'
+            echo "sudo apt install ./$DEB"
+            echo '```'
+            echo
+            echo "Changes in this package version:"
+            echo
+            dpkg-parsechangelog -S Changes | tail -n +4 | sed 's/^  //'
+          } > release-notes.md
+          gh release create "$tag" "dist/$DEB" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "quick-question $VERSION (Debian package)" \
+            --notes-file release-notes.md

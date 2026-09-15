@@ -1,0 +1,3 @@
+# The GitHub workflow lives beside debian/ on the packaging branch; it is not
+# an upstream change and must not end up in the Debian diff.
+extend-diff-ignore = "^\.github/"

@@ -1,0 +1,8 @@
+# debhelper build output
+/.debhelper/
+/quick-question/
+/quick-question-dbgsym/
+/debhelper-build-stamp
+/files
+/*.substvars
+/*.debhelper.log

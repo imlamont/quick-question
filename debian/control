@@ -1,0 +1,31 @@
+Source: quick-question
+Section: utils
+# Priority and Rules-Requires-Root are spelled out, although newer tools
+# assume these values, so builds on older releases such as the ubuntu-24.04
+# CI runner behave the same.
+Priority: optional
+Maintainer: Ian Lamont <imlamont@comcast.net>
+Build-Depends:
+ debhelper-compat (= 13),
+ libcjson-dev,
+ libcurl4-openssl-dev,
+ python3 <!nocheck>,
+Standards-Version: 4.7.3
+Homepage: https://github.com/imlamont/quick-question
+Rules-Requires-Root: no
+
+Package: quick-question
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: ask an AI model a quick question from the command line
+ qq sends a prompt to an AI model and prints the answer as plain text,
+ steered to be short and free of markdown. It works with any
+ OpenAI-compatible chat completions endpoint (such as LiteLLM, Ollama,
+ vLLM or OpenAI).
+ .
+ Backends are named profiles in a JSON configuration file. Piped
+ standard input is added to the prompt as context, and through a LiteLLM
+ proxy qq can use MCP tools such as web search, running follow-up tool
+ calls until the model has an answer.

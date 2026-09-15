@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+# Install unstripped: dh_strip strips and produces the -dbgsym package.
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/quick-question PREFIX=/usr INSTALL_STRIP=
