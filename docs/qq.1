@@ -1,0 +1,243 @@
+.TH QQ 1 "2026-09-15" "qq 0.1.0" "User Commands"
+.SH NAME
+qq \- ask an AI model a quick question
+.SH SYNOPSIS
+.B qq
+.RB [ \-hcrvwx ]
+.RB [ \-d
+.IR profile ]
+.RB [ \-p
+.IR profile ]
+.RB [ \-m
+.IR model ]
+.RB [ \-s
+.IR text ]
+.RB [ \-t
+.IR secs ]
+.RB [ \-\- ]
+.I prompt ...
+.SH DESCRIPTION
+.B qq
+sends
+.I prompt
+to an AI model and prints the answer on standard output as plain text.
+The request tells the model to answer briefly and directly, without markdown.
+.PP
+It works with any OpenAI-compatible
+.B /chat/completions
+endpoint.
+Endpoints are set up as named profiles in a JSON file; see
+.BR CONFIGURATION .
+.PP
+When standard input is not a terminal,
+.B qq
+reads it (up to 1 MiB) and appends it to the prompt inside
+.B <stdin>
+tags.
+If no prompt words are given, the input alone is the prompt.
+Option parsing stops at the first word that is not an option, so
+.B "qq how do I use ls \-la"
+keeps
+.B \-la
+in the prompt.
+.SH OPTIONS
+.TP
+.B \-h
+Print usage and exit.
+.TP
+.B \-v
+Print the version and exit.
+.TP
+.B \-c
+Add a line describing the environment (operating system, shell, current
+directory) to the system prompt.
+.TP
+.B \-r
+Let the model read files; see
+.BR "LOCAL TOOLS" .
+.TP
+.B \-w
+Let the model create and edit files.
+.TP
+.B \-x
+Let the model run shell commands.
+.TP
+.BI \-p " profile"
+Use
+.I profile
+for this call instead of the default.
+.TP
+.BI \-d " profile"
+Save
+.I profile
+as the default in the configuration file, then run the prompt if one was
+given.
+The file is replaced atomically; a symbolic link to it keeps working and the
+file mode is kept.
+.TP
+.BI \-m " model"
+Use
+.I model
+instead of the profile's model.
+.TP
+.BI \-s " text"
+Append
+.I text
+to the system prompt.
+.TP
+.BI \-t " secs"
+Time limit for the whole call, tool rounds included.
+Time spent answering approval prompts does not count.
+The default is the configuration's
+.BR timeout ,
+or 120 seconds if it has none.
+.TP
+.B \-\-
+End of options; everything after it is the prompt.
+.SH LOCAL TOOLS
+.BR \-r ,
+.B \-w
+and
+.B \-x
+may be combined in any order (for example
+.B \-rw
+or
+.BR \-xw ),
+and each of them implies
+.BR \-c .
+.B qq
+defines the tools and runs them itself:
+.TP
+.B \-r
+.BR read_file " (at most 256 KB), " list_directory ", and " search_files
+(plain-text search of the files under a directory, at most 200 matches,
+skipping hidden and binary files).
+.TP
+.B \-w
+.B write_file
+and
+.B edit_file
+(replaces text that occurs exactly once in the file).
+.TP
+.B \-x
+.B run_command
+runs a command with
+.BR "/bin/sh \-c"
+in the current directory, keeping 32 KB of each output stream, and stops it at
+the time limit.
+.PP
+Reads inside the current directory run immediately; a read outside it,
+including through a symbolic link, is confirmed first.
+Every write, edit and command is confirmed on the terminal
+.RI ( /dev/tty ),
+which shows exactly what will happen; only
+.B y
+or
+.B yes
+approves.
+Without a terminal the action is refused.
+Refusals are reported to the model as the tool's result.
+Each tool that runs is logged on standard error.
+.SH CONFIGURATION
+The configuration file holds a JSON object:
+.PP
+.RS
+.nf
+{
+  "default": "local",
+  "system_prompt": "Answer concisely in plain text.",
+  "timeout": 120,
+  "profiles": {
+    "local": {
+      "endpoint": "http://localhost:4000",
+      "model": "nemotron-3.5-lightning",
+      "api_key_env": "LITELLM_API_KEY",
+      "mcp_servers": ["searxng_mcp"]
+    }
+  }
+}
+.fi
+.RE
+.PP
+The top-level keys are
+.BR default ,
+.BR system_prompt ,
+.BR timeout ,
+and
+.BR profiles ,
+which is required.
+.PP
+A profile requires
+.B endpoint
+and
+.BR model .
+It also accepts
+.BR api_key_env ,
+the name of an environment variable that holds a bearer token, and
+.BR temperature ,
+.BR max_tokens ,
+.B system_prompt
+and
+.BR mcp_servers .
+An optional
+.B backend
+key may only be
+.BR openai .
+.PP
+With
+.BR mcp_servers ,
+the named LiteLLM MCP servers are offered to the model as tools.
+The proxy runs the first round of tool calls itself;
+.B qq
+runs any further calls through the proxy's
+.BR /mcp\-rest/tools/call .
+MCP and local tool calls together are limited to 20 rounds.
+.SH FILES
+.TP
+.I ~/.config/qq/config.json
+Default location of the configuration file.
+.TP
+.I config.example.json
+An example configuration, distributed with
+.BR qq .
+.SH ENVIRONMENT
+.TP
+.B QQ_CONFIG
+Path of the configuration file, overriding the default location.
+.TP
+.B XDG_CONFIG_HOME
+If set to an absolute path, the configuration file is
+.IR $XDG_CONFIG_HOME/qq/config.json .
+.TP
+.B SHELL
+Reported by
+.BR \-c .
+.PP
+API keys are read from the environment variable named by a profile's
+.BR api_key_env .
+They are never stored in the configuration file.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The endpoint or the network failed, or the model gave an empty answer.
+.TP
+.B 2
+Usage or configuration error.
+.SH EXAMPLES
+.nf
+qq what is the capital of france
+git diff | qq summarize this change
+qq \-c how do I list files by size
+qq \-r what does the debug target in the Makefile do
+qq \-rw add a clean target to the Makefile
+qq \-p litellm \-m nemotron\-3\-super \-s "Reply in French." say hello
+qq \-d litellm
+.fi
+.SH SEE ALSO
+The
+.I README.md
+file distributed with
+.BR qq .

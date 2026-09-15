@@ -1,0 +1,22 @@
+{
+  "default": "local",
+  "system_prompt": "Answer concisely in plain text.",
+  "timeout": 120,
+  "profiles": {
+    "local": {
+      "backend": "openai",
+      "endpoint": "http://localhost:11434/v1",
+      "model": "qwen3:8b",
+      "api_key_env": "OPENAI_API_KEY",
+      "temperature": 0.2,
+      "max_tokens": 1024
+    },
+    "litellm": {
+      "backend": "openai",
+      "endpoint": "http://localhost:4000",
+      "model": "nemotron-3.5-lightning",
+      "api_key_env": "LITELLM_API_KEY",
+      "mcp_servers": ["searxng_mcp"]
+    }
+  }
+}
