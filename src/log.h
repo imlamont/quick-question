@@ -22,6 +22,11 @@ int log_on(void);
 
 void log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+/* The command line as invoked, one argument after another, each quoted the way
+ * a shell would need it. Logged first, so a log read back later begins with
+ * what was actually asked for. */
+void log_command(int argc, char **argv);
+
 /* event followed by json, compact, on one line. */
 void log_json(const char *event, const struct cJSON *json);
 

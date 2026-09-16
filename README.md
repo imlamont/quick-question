@@ -105,6 +105,7 @@ and "which tool ran?" without a proxy in the way.
 ```
 $ qq -w -L /tmp/qq.log write the current weather to test.txt
 $ cut -c1-90 /tmp/qq.log
+2026-09-16T00:04:22.911-0400 command qq -w -L /tmp/qq.log 'write the current weather to test.txt'
 2026-09-16T00:04:22.911-0400 start qq 0.3.0 pid=14987
 2026-09-16T00:04:22.911-0400 profile ol model=hermes3:latest endpoint=http://localhost:11434/v1 tools=w
 2026-09-16T00:04:22.911-0400 timeout 300s
@@ -125,6 +126,7 @@ then the event:
 
 | Event | What it records |
 | --- | --- |
+| `command` | the whole command line as invoked, quoted the way a shell would need it |
 | `start` | version and process id |
 | `profile` | profile name, model, endpoint and the tool flags in force |
 | `timeout` | the limit the whole call has to finish in |

@@ -130,6 +130,7 @@ int main(int argc, char **argv)
 	/* Opened before anything else can fail, so the log explains that too. */
 	if (opt_log && log_open(opt_log, err, sizeof err))
 		goto fail;
+	log_command(argc, argv);
 	log_printf("start qq " QQ_VERSION " pid=%ld", (long)getpid());
 
 	if (!(path = config_path())) {

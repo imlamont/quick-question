@@ -2,6 +2,7 @@
 #include "buf.h"
 
 #include <cjson/cJSON.h>
+#include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -55,6 +56,41 @@ void log_printf(const char *fmt, ...)
 	fputc('\n', out);
 	/* Flushed per entry, so a log still explains a run that was interrupted. */
 	fflush(out);
+}
+
+void log_command(int argc, char **argv)
+{
+	static const char plain[] = "-_./:=@+,";
+	struct buf b = {0};
+
+	if (!out)
+		return;
+	for (int i = 0; i < argc; i++) {
+		/* Escaped first, so the quoting below wraps text that is already
+		 * safe to put on one line. */
+		char *arg = log_escape(argv[i], strlen(argv[i]));
+		int bare = *arg != '\0';
+
+		for (const char *p = arg; bare && *p; p++)
+			bare = isalnum((unsigned char)*p) || strchr(plain, *p) != NULL;
+		if (i)
+			buf_puts(&b, " ");
+		if (bare) {
+			buf_puts(&b, arg);
+		} else {
+			buf_puts(&b, "'");
+			for (const char *p = arg; *p; p++) {
+				if (*p == '\'')
+					buf_puts(&b, "'\\''");
+				else
+					buf_append(&b, p, 1);
+			}
+			buf_puts(&b, "'");
+		}
+		free(arg);
+	}
+	log_printf("command %s", b.data ? b.data : "");
+	buf_free(&b);
 }
 
 void log_json(const char *event, const cJSON *json)

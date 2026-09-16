@@ -306,6 +306,8 @@ out_is "-L answer unchanged" "hello from test-model"
 true_that "-L writes a log" [ -s "$L" ]
 out=$(<"$L")
 out_has "-L logs the start" "start qq "
+true_that "-L logs the command first" [ "$(head -1 "$L" | awk '{print $2}')" = "command" ]
+out_has "-L logs the command" "command $QQ -L $L hello there"
 out_has "-L logs the profile" "profile local model=test-model"
 out_has "-L logs the request body" '"role":"user","content":"hello there"'
 out_has "-L logs the response" "response 200 "
@@ -317,6 +319,12 @@ true_that "-L stamps every line" \
 	  -eq "$(wc -l <"$L")" ]
 # The key travels in a header, which is never logged.
 true_that "-L never logs the api key" [ "$(grep -c "$QQ_TEST_KEY" "$L")" -eq 0 ]
+
+# An argument a shell would have to quote is quoted in the log too.
+rm -f "$L"
+q -L "$L" -s "be brief" "don't explain"
+out=$(<"$L")
+out_has "-L quotes command arguments" "-s 'be brief' 'don'\\''t explain'"
 
 # A second run appends rather than starting over.
 before=$(wc -l <"$L")

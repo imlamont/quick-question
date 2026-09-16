@@ -71,6 +71,9 @@ Report actual test output. Don't claim a result you didn't run.
   - `log_open` appends, and every other entry point does nothing until it has
     succeeded, so call sites need no `if (logging)` guard. `log_on()` exists only
     to skip work the log alone would need, such as escaping a large body.
+  - `log_command` opens the log with the command line as invoked, each argument
+    shell-quoted only when it needs it, so a log read back later starts with
+    what was asked for.
   - One event per line: `stamp()` writes a local timestamp to the millisecond
     plus the UTC offset, then the event name and its details. Keep it that way --
     the format's whole value is that `grep` and `cut` work on it.

@@ -362,7 +362,32 @@ static void test_log(void)
 	CHECK(!log_on());
 	log_printf("ignored %d", 1);
 	log_json("ignored", NULL);
+	log_command(1, (char *[]){ "qq" });
 	log_close();
+
+	/* The command line is written first, quoted the way a shell would need. */
+	{
+		char path[] = "/tmp/qq-unit-log-XXXXXX";
+		char *args[] = { "qq", "-w", "two words", "don't", "tab\there", "" };
+		char line[512] = "";
+		int fd = mkstemp(path);
+		FILE *f;
+
+		CHECK(fd >= 0);
+		close(fd);
+		CHECK(log_open(path, line, sizeof line) == 0);
+		CHECK(log_on());
+		log_command(6, args);
+		log_close();
+		CHECK(!log_on());
+		f = fopen(path, "r");
+		CHECK(f && fgets(line, sizeof line, f));
+		if (f)
+			fclose(f);
+		unlink(path);
+		s = strstr(line, "command ");
+		STREQ(s ? s : "", "command qq -w 'two words' 'don'\\''t' 'tab\\there' ''\n");
+	}
 
 }
 
