@@ -18,6 +18,7 @@ struct profile {
 	int max_tokens;            /* 0 when unset */
 	int tools;                 /* "tools": false forbids -r, -w and -x */
 	int mcp;                   /* "mcp": false ignores "mcp_servers" */
+	int allow_danger;          /* "allow_danger": true is what -y requires */
 	const struct cJSON *mcp_servers; /* non-empty array of names, or NULL */
 };
 

@@ -414,6 +414,7 @@ static void test_config(void)
 	CHECK(!p.system_prompt);
 	CHECK(cJSON_GetArraySize(p.mcp_servers) == 1);
 	CHECK(p.tools == 1 && p.mcp == 1); /* on unless a profile says otherwise */
+	CHECK(p.allow_danger == 0);        /* off unless a profile says otherwise */
 
 	/* "backend" is optional */
 	CHECK(config_profile(&c, "plain", &p, err, sizeof err) == 0);
@@ -471,15 +472,17 @@ static void test_config(void)
 			"\"off\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":false,"
 			"\"mcp\":false,\"mcp_servers\":[\"searx\"]},"
 			"\"on\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":true,"
-			"\"mcp\":true,\"mcp_servers\":[\"searx\"]},"
+			"\"mcp\":true,\"allow_danger\":true,\"mcp_servers\":[\"searx\"]},"
 			"\"null\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":null}}}";
 
 		CHECK(config_parse(&s2, switches, strlen(switches), err, sizeof err) == 0);
 		CHECK(config_profile(&s2, "off", &q, err, sizeof err) == 0);
 		CHECK(q.tools == 0 && q.mcp == 0);
+		CHECK(q.allow_danger == 0); /* absent stays off, unlike tools and mcp */
 		CHECK(!q.mcp_servers); /* "mcp": false hides the servers it lists */
 		CHECK(config_profile(&s2, "on", &q, err, sizeof err) == 0);
 		CHECK(q.tools == 1 && q.mcp == 1);
+		CHECK(q.allow_danger == 1);
 		CHECK(cJSON_GetArraySize(q.mcp_servers) == 1);
 		CHECK(config_profile(&s2, "null", &q, err, sizeof err) == 0);
 		CHECK(q.tools == 1); /* null is "unset", like a missing member */
@@ -491,6 +494,9 @@ static void test_config(void)
 	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
 			  "\"model\":\"m\",\"mcp\":1}}}", "x", err, sizeof err) != 0);
 	CHECK(strstr(err, "profile \"x\": \"mcp\" must be true or false"));
+	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
+			  "\"model\":\"m\",\"allow_danger\":\"yes\"}}}", "x", err, sizeof err) != 0);
+	CHECK(strstr(err, "profile \"x\": \"allow_danger\" must be true or false"));
 
 	CHECK(try_profile("{\"profiles\":{}}", NULL, err, sizeof err) != 0);
 	CHECK(strstr(err, "no profile selected"));

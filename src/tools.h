@@ -27,6 +27,14 @@ void tools_describe(struct buf *out, int enabled);
 /* The TOOLS_* flag that enables tool name, or 0 if it isn't a local tool. */
 int tools_flag(const char *name);
 
+/* Answer every approval prompt with yes, showing it on stderr instead of
+ * asking. This is what -y does, and qq.c calls it only after checking that the
+ * profile has "allow_danger": true. Nothing else may call it: it is the one
+ * route by which a write, an edit or a command happens unapproved, and it works
+ * with no terminal at all, so a run in a script or a cron job is no longer
+ * stopped by the absence of one. */
+void tools_skip_approval(void);
+
 enum { TOOLS_ANSWER_NO = 0, TOOLS_ANSWER_YES = 1, TOOLS_ANSWER_TIMEOUT = -2 };
 
 /* Read one y/N answer from fd, waiting at most timeout_ms. End of input counts

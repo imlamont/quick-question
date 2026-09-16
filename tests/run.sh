@@ -60,7 +60,8 @@ cat >"$T/config.json" <<EOF
                 "api_key_env": "QQ_MISSING_KEY" },
     "notools":{ "endpoint": "http://127.0.0.1:$PORT/v1", "model": "test-model", "tools": false },
     "nomcp":  { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "tooler", "mcp": false,
-                "mcp_servers": ["searxng_mcp"] }
+                "mcp_servers": ["searxng_mcp"] },
+    "danger": { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "reader", "allow_danger": true }
   }
 }
 EOF
@@ -71,12 +72,12 @@ unset QQ_MISSING_KEY
 # --- CLI -------------------------------------------------------------------
 q -h;                 expect_rc "-h" 0; out_has "-h" "usage: qq"; out_has "-h" "-d profile"
 out_has "-h tools" "-r, -w and -x combine"
-out_has "-h usage flags" "qq [-hclrvwx]"
+out_has "-h usage flags" "qq [-hclrvwxy]"
 out_has "-h lists -l" "-l          list profile names"
 q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.3.0"
 
 q -l;                 expect_rc "-l" 0
-out_is "-l marks the default" $'* local\n  alt\n  down\n  tools\n  lt\n  nokey\n  notools\n  nomcp'
+out_is "-l marks the default" $'* local\n  alt\n  down\n  tools\n  lt\n  nokey\n  notools\n  nomcp\n  danger'
 q -p alt -l;          expect_rc "-p -l" 0; out_has "-l marks -p" "* alt"
 out_lacks "-l marks only -p" "* local"
 q -l hi;              expect_rc "-l with a prompt" 0; out_has "-l with a prompt" "* local"
@@ -86,7 +87,7 @@ q -z hi;              expect_rc "bad flag" 2
 q -t abc hi;          expect_rc "-t abc" 2; err_has "-t abc" "invalid timeout"
 q -t 0 hi;            expect_rc "-t 0" 2
 q -p;                 expect_rc "-p without value" 2
-q -p nope hi;         expect_rc "unknown profile" 2; err_has "unknown profile" "available: local, alt, down, tools, lt, nokey, notools, nomcp"
+q -p nope hi;         expect_rc "unknown profile" 2; err_has "unknown profile" "available: local, alt, down, tools, lt, nokey, notools, nomcp, danger"
 
 QQ_CONFIG="$T/missing.json" "$QQ" hi </dev/null 2>"$T/stderr"; rc=$?; err=$(<"$T/stderr"); out=
 expect_rc "missing config" 2; err_has "missing config" "config not found"
@@ -420,6 +421,51 @@ qws -p nomcp -r -m reader look
 expect_rc '"mcp": false leaves -r alone' 0
 out_is '"mcp": false leaves -r alone' $'ALPHA line\nbeta needle line'
 out=$(tools_offered);  out_is '"mcp": false still offers local tools' "['read_file', 'list_directory', 'search_files']"
+
+# --- -y (skip approval) ----------------------------------------------------
+
+# Only a profile that opted in accepts -y; the flag is never enough on its own.
+q -y hello;                       expect_rc "-y needs allow_danger" 2
+err_has "-y needs allow_danger" 'profile "local" does not have "allow_danger": true, so -y cannot be used with it'
+q -p lt -w -y -m writer go;       expect_rc "-y needs allow_danger with tools" 2
+true_that "-y refused does nothing" [ ! -e "$W/yes.txt" ]
+
+# With the opt-in, every prompt answers itself -- including with no terminal at
+# all, which is the whole point and the whole danger.
+rm -f "$W/out.txt"
+qws -p danger -w -y -m writer go
+expect_rc "-y writes with no terminal" 0
+out_has "-y writes with no terminal" "wrote 17 bytes to out.txt"
+true_that "-y really wrote the file" [ "$(cat "$W/out.txt")" = "written by model" ]
+# The question is still shown, so the run leaves a record of what was allowed.
+err_has "-y still shows the write" "the model wants to write out.txt (17 bytes)"
+err_has "-y says it was not asked" "Allowed by -y."
+
+# Commands too, and reads outside the working directory.
+qws -p danger -x -y -m runner go
+expect_rc "-y runs a command with no terminal" 0
+out_has "-y runs a command" "exit status 3"
+err_has "-y shows the command" '$ echo from-shell'
+qws -p danger -r -y -m outsider look
+expect_rc "-y reads outside the directory" 0
+out_has "-y reads outside the directory" "top secret"
+
+# Without -y the same detached run is still refused.
+rm -f "$W/out.txt"
+qws -p danger -w -m writer go
+out_has "danger profile still asks without -y" "no terminal to ask the user"
+true_that "danger profile writes nothing without -y" [ ! -e "$W/out.txt" ]
+
+# The log records that approval was skipped for the run and for each call.
+rm -f "$L" "$W/out.txt"
+qws -p danger -w -y -m writer -L "$L" go
+out=$(<"$L")
+out_has "-y is logged for the run" "approval skipped for the whole run by -y"
+out_has "-y is logged per call" "approval yes by -y"
+
+q -h
+out_has "-h documents -y" "-y          DANGEROUS: do every tool call without asking"
+out_has "usage shows -y" "qq [-hclrvwxy]"
 
 # --- -d (set default) ------------------------------------------------------
 cp "$T/config.json" "$T/d.json"

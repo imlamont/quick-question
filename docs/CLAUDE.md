@@ -52,7 +52,7 @@ Report actual test output. Don't claim a result you didn't run.
 
 | File | Responsibility |
 |---|---|
-| `src/qq.c` | getopt (`"+hlvcrwxd:p:m:s:t:L:"`), orchestration, output, exit codes |
+| `src/qq.c` | getopt (`"+hlvcrwxyd:p:m:s:t:L:"`), orchestration, output, exit codes |
 | `src/config.c` | config path lookup, cJSON parse and validation, the `tools`/`mcp` profile switches, `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode) |
 | `src/prompt.c` | system-prompt layering, `-c` environment line, `<stdin>` wrapping, reply cleanup (`<think>` block, trimming) |
 | `src/openai.c` | builds the chat request and runs the tool loop (at most `QQ_MAX_TOOL_ROUNDS`). Local tool calls go to `tools_call`, others to `mcp_call`. Time spent at approval prompts extends the deadline. Keeps a `struct history` of local calls already answered, so repeats are replayed instead of redone. |
@@ -137,7 +137,7 @@ Report actual test output. Don't claim a result you didn't run.
   - It appends the assistant turn with `tool_calls` and one `role: "tool"` message per call, then asks again.
   - Tool failures go back to the model as `error: ...` rather than aborting.
   - `arguments` arrives as a JSON string; `""` means `{}`.
-- **Profile switches** (`config.c`): `tools` and `mcp` are read with `get_bool`,
+- **Profile switches** (`config.c`): `tools`, `mcp` and `allow_danger` are read with `get_bool`,
   which leaves the value alone unless the member is a real JSON boolean, so
   absent and `null` both mean "on". Defaults are set in the `struct profile`
   initializer, not in the parser. `"mcp": false` simply leaves `mcp_servers`
@@ -175,7 +175,16 @@ Report actual test output. Don't claim a result you didn't run.
     error rather than spinning to `QQ_MAX_TOOL_ROUNDS`.
   - **Never add a way to approve without a terminal**, such as an environment
     variable, a config key or a "yes to all" flag, unless the owner explicitly
-    asks. The tests answer prompts through a pseudo-terminal instead.
+    asks. The tests answer prompts through a pseudo-terminal instead. The owner
+    asked for exactly one, `-y`, and it is the only one: do not add a second, and
+    do not loosen this one.
+  - `-y` (`tools_skip_approval`) makes `confirm()` return yes without opening
+    `/dev/tty`, which is also what lets a `-y` run work with no terminal at all.
+    Two things guard it and both must stay: `qq.c` refuses the flag unless the
+    profile has `"allow_danger": true` (exit 2, before anything is sent), and
+    the question is still printed to stderr so the run records what was done.
+    `allow_danger` defaults to **off** while `tools` and `mcp` default to on --
+    a capability you give away is opt-in, one you already had is opt-out.
   - Anything model-controlled that is shown on the terminal or stderr goes
     through `append_preview`, which turns control characters into `?`. Keep it
     that way; it stops escape-sequence injection.

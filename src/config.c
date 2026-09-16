@@ -174,7 +174,8 @@ int config_profile(const struct config *c, const char *name, struct profile *p,
 	    get_str(obj, "api_key_env", &p->api_key_env, where, err, errlen) ||
 	    get_str(obj, "system_prompt", &p->system_prompt, where, err, errlen) ||
 	    get_bool(obj, "tools", &p->tools, where, err, errlen) ||
-	    get_bool(obj, "mcp", &p->mcp, where, err, errlen))
+	    get_bool(obj, "mcp", &p->mcp, where, err, errlen) ||
+	    get_bool(obj, "allow_danger", &p->allow_danger, where, err, errlen))
 		return -1;
 
 	/* "backend" is optional: OpenAI-compatible endpoints are the only kind. */

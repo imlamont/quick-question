@@ -221,6 +221,13 @@ static void note(const char *name, const char *arg)
  * unattended run would wait for an answer forever. */
 #define APPROVAL_TIMEOUT_MS (120 * 1000)
 
+static int skip_approval;
+
+void tools_skip_approval(void)
+{
+	skip_approval = 1;
+}
+
 int tools_read_answer(int fd, long long timeout_ms)
 {
 	struct pollfd pfd = { .fd = fd, .events = POLLIN };
@@ -252,8 +259,16 @@ int tools_read_answer(int fd, long long timeout_ms)
 static int confirm(const char *question, long long *waited_ms)
 {
 	long long start = proc_now_ms(), spent;
-	int fd = open("/dev/tty", O_RDWR | O_CLOEXEC), r;
+	int fd, r;
 
+	/* -y: still shown, just not asked, so the terminal and the log both keep
+	 * a record of what was allowed on the user's behalf. */
+	if (skip_approval) {
+		fprintf(stderr, "\n%s\nAllowed by -y.\n", question);
+		log_printf("approval yes by -y");
+		return TOOLS_ANSWER_YES;
+	}
+	fd = open("/dev/tty", O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
 		log_printf("approval no-terminal");
 		return -1;

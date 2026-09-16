@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 static const char usage[] =
-	"usage: qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs]\n"
+	"usage: qq [-hclrvwxy] [-d profile] [-p profile] [-m model] [-s text] [-t secs]\n"
 	"          [-L file] [--] prompt...\n";
 
 static const char help[] =
@@ -35,6 +35,8 @@ static const char help[] =
 	"  -s text     append extra steering to the system prompt\n"
 	"  -t secs     timeout (default: config \"timeout\", else 120)\n"
 	"  -L file     append a timestamped log of the whole exchange to file\n"
+	"  -y          DANGEROUS: do every tool call without asking. Needs the\n"
+	"              profile to have \"allow_danger\": true\n"
 	"\n"
 	"-r, -w and -x combine (-rw, -xw, ...) and imply -c. qq asks on the terminal\n"
 	"before every write, edit, command, and read outside the current directory.\n"
@@ -59,6 +61,7 @@ int main(int argc, char **argv)
 {
 	const char *opt_profile = NULL, *opt_default = NULL, *opt_model = NULL, *opt_system = NULL;
 	const char *opt_log = NULL;
+	int opt_yes = 0;
 	const char *parts[6];
 	long opt_timeout = 0, timeout;
 	int opt_context = 0, opt_tools = 0, opt_list = 0, ch, r, rc = 2;
@@ -69,7 +72,7 @@ int main(int argc, char **argv)
 	struct profile prof;
 
 	/* '+' stops at the first non-option, so "qq how do I ls -la" keeps -la. */
-	while ((ch = getopt(argc, argv, "+hlvcrwxd:p:m:s:t:L:")) != -1) {
+	while ((ch = getopt(argc, argv, "+hlvcrwxyd:p:m:s:t:L:")) != -1) {
 		switch (ch) {
 		case 'h':
 			fputs(usage, stdout);
@@ -105,6 +108,9 @@ int main(int argc, char **argv)
 			break;
 		case 'L':
 			opt_log = optarg;
+			break;
+		case 'y':
+			opt_yes = 1;
 			break;
 		case 't':
 			if (parse_timeout(optarg, &opt_timeout)) {
@@ -175,6 +181,18 @@ int main(int argc, char **argv)
 			 "profile \"%s\" has \"tools\": false, so -r, -w and -x cannot be used with it",
 			 prof.name);
 		goto fail;
+	}
+	/* -y is the only way a tool runs unapproved, so the profile has to have
+	 * said so in the config first; the flag alone is never enough. */
+	if (opt_yes && !prof.allow_danger) {
+		snprintf(err, sizeof err,
+			 "profile \"%s\" does not have \"allow_danger\": true, so -y cannot be used with it",
+			 prof.name);
+		goto fail;
+	}
+	if (opt_yes) {
+		log_printf("approval skipped for the whole run by -y");
+		tools_skip_approval();
 	}
 
 	if (!isatty(STDIN_FILENO)) {

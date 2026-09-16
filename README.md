@@ -76,7 +76,7 @@ sudo make install    # installs bin/qq and share/man/man1/qq.1 under /usr/local
 ## Usage
 
 ```
-qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs]
+qq [-hclrvwxy] [-d profile] [-p profile] [-m model] [-s text] [-t secs]
    [-L file] [--] prompt...
 ```
 
@@ -95,6 +95,43 @@ qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs]
 | `-s text` | Add extra steering text to the system prompt |
 | `-t secs` | Timeout for the whole call, tool rounds included (default: config `timeout`, else 120) |
 | `-L file` | Append a timestamped log of the whole exchange to `file` (see [Debug log](#debug-log--l)) |
+| `-y` | **Dangerous.** Do every tool call without asking (see [Skipping approval](#skipping-approval--y)) |
+
+### Skipping approval (`-y`)
+
+`-y` answers every approval with yes. Writes, edits, commands and reads outside
+the working directory all happen as soon as the model asks for them, and no
+terminal is needed, so `qq` will do them in a script or a cron job where it
+would otherwise refuse for want of one.
+
+Because that removes the only thing standing between a model and your files,
+the flag is not enough on its own. The profile has to have opted in:
+
+```json
+"agent": {
+  "endpoint": "http://localhost:4000",
+  "model": "nemotron-3.5-lightning",
+  "api_key_env": "LITELLM_API_KEY",
+  "allow_danger": true
+}
+```
+
+`allow_danger` is off unless a profile says `true`, and `-y` on any other
+profile is an error (exit 2) that does nothing. Keep it on a profile you made
+for the purpose, not on the one you use day to day.
+
+Each action is still printed on stderr before it happens, so the run leaves a
+record of what was done on your behalf:
+
+```
+qq: the model wants to write out.txt (17 bytes):
+written by model
+Allowed by -y.
+qq: write_file out.txt
+```
+
+`-y` has nothing to do with MCP calls: those never ask for approval in the
+first place, since they run on the server rather than on your machine.
 
 ### Debug log (`-L`)
 
@@ -295,6 +332,7 @@ durable option.
 | `mcp_servers` | LiteLLM MCP server names to offer as tools (see below) |
 | `tools` | `false` forbids `-r`, `-w` and `-x` on this profile; anything else, including leaving it out, allows them |
 | `mcp` | `false` ignores this profile's `mcp_servers`; anything else, including leaving it out, offers them |
+| `allow_danger` | `true` lets `-y` skip every approval on this profile; off unless set (see [Skipping approval](#skipping-approval--y)) |
 | `backend` | Optional; `openai` is the only value accepted |
 
 The model must support OpenAI-style tool calling for `-r`, `-w`, `-x` and

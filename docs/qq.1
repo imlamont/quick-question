@@ -3,7 +3,7 @@
 qq \- ask an AI model a quick question
 .SH SYNOPSIS
 .B qq
-.RB [ \-hclrvwx ]
+.RB [ \-hclrvwxy ]
 .RB [ \-d
 .IR profile ]
 .RB [ \-p
@@ -102,6 +102,22 @@ Time spent answering approval prompts does not count.
 The default is the configuration's
 .BR timeout ,
 or 120 seconds if it has none.
+.TP
+.B \-y
+Answer every approval with yes.
+Writes, edits, commands and reads outside the working directory are carried out
+as soon as the model asks, and no terminal is needed, so
+.B qq
+will do them in a script or a cron job where it would otherwise refuse for want
+of one.
+The flag is not enough by itself: the profile must have
+.BR "allow_danger" : true ,
+which is off unless set, and
+.B \-y
+on any other profile is an error (exit 2) that does nothing.
+Each action is still printed on standard error before it happens.
+MCP calls are unaffected, never having been approved: they run on the server,
+not on this machine.
 .TP
 .BI \-L " file"
 Append a debug log of the whole exchange to
@@ -257,6 +273,10 @@ ignored, and
 .B "mcp" : false
 ignores the profile's
 .BR mcp_servers .
+.B "allow_danger" : true ,
+off unless set, is what
+.B \-y
+requires.
 They are independent: a profile with
 .B "mcp" : false
 can still use
