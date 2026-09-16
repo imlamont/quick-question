@@ -1,5 +1,6 @@
 #include "buf.h"
 #include "config.h"
+#include "log.h"
 #include "openai.h"
 #include "prompt.h"
 #include "qq.h"
@@ -13,7 +14,8 @@
 #include <unistd.h>
 
 static const char usage[] =
-	"usage: qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prompt...\n";
+	"usage: qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs]\n"
+	"          [-L file] [--] prompt...\n";
 
 static const char help[] =
 	"\n"
@@ -32,6 +34,7 @@ static const char help[] =
 	"  -m model    override the profile's model\n"
 	"  -s text     append extra steering to the system prompt\n"
 	"  -t secs     timeout (default: config \"timeout\", else 120)\n"
+	"  -L file     append a timestamped log of the whole exchange to file\n"
 	"\n"
 	"-r, -w and -x combine (-rw, -xw, ...) and imply -c. qq asks on the terminal\n"
 	"before every write, edit, command, and read outside the current directory.\n"
@@ -55,6 +58,7 @@ static int parse_timeout(const char *s, long *out)
 int main(int argc, char **argv)
 {
 	const char *opt_profile = NULL, *opt_default = NULL, *opt_model = NULL, *opt_system = NULL;
+	const char *opt_log = NULL;
 	const char *parts[6];
 	long opt_timeout = 0, timeout;
 	int opt_context = 0, opt_tools = 0, opt_list = 0, ch, r, rc = 2;
@@ -65,7 +69,7 @@ int main(int argc, char **argv)
 	struct profile prof;
 
 	/* '+' stops at the first non-option, so "qq how do I ls -la" keeps -la. */
-	while ((ch = getopt(argc, argv, "+hlvcrwxd:p:m:s:t:")) != -1) {
+	while ((ch = getopt(argc, argv, "+hlvcrwxd:p:m:s:t:L:")) != -1) {
 		switch (ch) {
 		case 'h':
 			fputs(usage, stdout);
@@ -99,6 +103,9 @@ int main(int argc, char **argv)
 		case 's':
 			opt_system = optarg;
 			break;
+		case 'L':
+			opt_log = optarg;
+			break;
 		case 't':
 			if (parse_timeout(optarg, &opt_timeout)) {
 				fprintf(stderr, "qq: invalid timeout: %s\n", optarg);
@@ -119,6 +126,11 @@ int main(int argc, char **argv)
 		fputs(usage, stderr);
 		goto out;
 	}
+
+	/* Opened before anything else can fail, so the log explains that too. */
+	if (opt_log && log_open(opt_log, err, sizeof err))
+		goto fail;
+	log_printf("start qq " QQ_VERSION " pid=%ld", (long)getpid());
 
 	if (!(path = config_path())) {
 		snprintf(err, sizeof err, "cannot locate config: set $QQ_CONFIG or $HOME");
@@ -153,6 +165,9 @@ int main(int argc, char **argv)
 		goto fail;
 	if (opt_model && *opt_model)
 		prof.model = opt_model;
+	log_printf("profile %s model=%s endpoint=%s tools=%s%s%s", prof.name, prof.model,
+		   prof.endpoint, opt_tools & TOOLS_READ ? "r" : "",
+		   opt_tools & TOOLS_WRITE ? "w" : "", opt_tools & TOOLS_EXEC ? "x" : "");
 
 	if (!isatty(STDIN_FILENO)) {
 		r = buf_read_fd(&input, STDIN_FILENO, QQ_STDIN_MAX);
@@ -183,6 +198,7 @@ int main(int argc, char **argv)
 	prompt_system(&sys, parts, sizeof parts / sizeof *parts);
 	prompt_user(&user, prompt.data, input.data, input.len);
 	timeout = opt_timeout ? opt_timeout : cfg.timeout;
+	log_printf("timeout %lds", timeout);
 
 	rc = 1;
 	if (curl_global_init(CURL_GLOBAL_DEFAULT)) {
@@ -195,6 +211,12 @@ int main(int argc, char **argv)
 		goto fail;
 
 	text = prompt_clean(reply);
+	if (log_on()) {
+		char *shown = log_escape(text, strlen(text));
+
+		log_printf("answer %s", shown);
+		free(shown);
+	}
 	if (!*text) {
 		snprintf(err, sizeof err, "empty response");
 		goto fail;
@@ -206,8 +228,11 @@ int main(int argc, char **argv)
 	rc = 0;
 	goto out;
 fail:
+	log_printf("failed %s", err);
 	fprintf(stderr, "qq: %s\n", err);
 out:
+	log_printf("exit %d", rc);
+	log_close();
 	free(reply);
 	free(path);
 	config_free(&cfg);

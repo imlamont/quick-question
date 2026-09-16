@@ -295,6 +295,85 @@ out_has "command exit status" "exit status 3"
 out_has "command stdout" $'--- stdout ---\nfrom-shell'
 out_has "command stderr" $'--- stderr ---\noops'
 
+# --- -L (debug log) --------------------------------------------------------
+L="$T/qq.log"
+logged() { grep -c "^$(date +%Y)-.*$1" "$L"; }
+
+rm -f "$L"
+q -L "$L" hello there
+expect_rc "-L runs normally" 0
+out_is "-L answer unchanged" "hello from test-model"
+true_that "-L writes a log" [ -s "$L" ]
+out=$(<"$L")
+out_has "-L logs the start" "start qq "
+out_has "-L logs the profile" "profile local model=test-model"
+out_has "-L logs the request body" '"role":"user","content":"hello there"'
+out_has "-L logs the response" "response 200 "
+out_has "-L logs the answer" "answer hello from test-model"
+out_has "-L logs the exit" "exit 0"
+# Every line begins with a timestamp to the millisecond and a UTC offset.
+true_that "-L stamps every line" \
+	[ "$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}[-+][0-9]{4} ' "$L")" \
+	  -eq "$(wc -l <"$L")" ]
+# The key travels in a header, which is never logged.
+true_that "-L never logs the api key" [ "$(grep -c "$QQ_TEST_KEY" "$L")" -eq 0 ]
+
+# A second run appends rather than starting over.
+before=$(wc -l <"$L")
+q -L "$L" again
+true_that "-L appends" [ "$(wc -l <"$L")" -gt "$before" ]
+
+# Tool calls, approvals and results are all in there.
+rm -f "$L" "$W/out.txt"
+qtty 'y\n' -p lt -w -m writer -L "$L" go
+expect_rc "-L with a tool" 0
+out=$(<"$L")
+out_has "-L logs the tool call" 'tool-call write_file {"path": "out.txt"'
+out_has "-L logs the approval" "approval yes after "
+out_has "-L logs the tool result" "tool-result write_file wrote 17 bytes to out.txt"
+out_has "-L logs the round" "tool-round 0 calls=1"
+
+rm -f "$L" "$W/out.txt"
+qtty 'n\n' -p lt -w -m writer -L "$L" go
+out=$(<"$L")
+out_has "-L logs a denial" "approval no after "
+out_has "-L logs the refusal result" "the user denied this"
+
+rm -f "$L"
+qws -p lt -w -m writer -L "$L" go
+out=$(<"$L")
+out_has "-L logs a missing terminal" "approval no-terminal"
+
+# MCP calls name the server and the tool.
+rm -f "$L"
+q -p tools -L "$L" find cats
+expect_rc "-L with MCP" 0
+out=$(<"$L")
+out_has "-L logs the mcp call" "mcp-call server=searxng_mcp tool=web_search via "
+out_has "-L logs the mcp result" "mcp-result searxng_mcp-web_search results for cats"
+
+# A repeat answered from history says so.
+rm -f "$L" "$W/out.txt"
+qtty 'y\ny\n' -p lt -w -m writeloop -L "$L" go
+out=$(<"$L")
+out_has "-L logs a repeat" "tool-repeat write_file answered from history"
+
+# Control characters in a result cannot break a line or steer the terminal.
+rm -f "$L"
+qtty 'y\n' -p lt -x -m runner -L "$L" go
+out=$(<"$L")
+out_has "-L escapes newlines in results" "tool-result run_command exit status 3\\n"
+
+# A log that cannot be opened is a startup error, and nothing else runs.
+q -L "$T/nodir/qq.log" hi
+expect_rc "unusable -L" 2
+err_has "unusable -L" "cannot open log $T/nodir/qq.log"
+out_is "unusable -L answers nothing" ""
+
+q -h
+out_has "-h documents -L" "-L file     append a timestamped log"
+out_has "usage shows -L" "[-L file]"
+
 # --- -d (set default) ------------------------------------------------------
 cp "$T/config.json" "$T/d.json"
 chmod 600 "$T/d.json"

@@ -14,6 +14,8 @@ qq \- ask an AI model a quick question
 .IR text ]
 .RB [ \-t
 .IR secs ]
+.RB [ \-L
+.IR file ]
 .RB [ \-\- ]
 .I prompt ...
 .SH DESCRIPTION
@@ -100,6 +102,42 @@ Time spent answering approval prompts does not count.
 The default is the configuration's
 .BR timeout ,
 or 120 seconds if it has none.
+.TP
+.BI \-L " file"
+Append a debug log of the whole exchange to
+.IR file ,
+which is created if needed; a file that cannot be opened is an error (exit 2)
+and nothing is sent.
+Each event is one line, beginning with a local timestamp to the millisecond and
+its UTC offset:
+.BR start ,
+.BR profile ,
+.BR timeout ,
+.B request
+(the URL and the entire request body, chat and MCP alike),
+.B response
+(status, elapsed time and the whole body),
+.BR request\-failed ,
+.BR tool\-round ,
+.B tool\-call
+(name and the arguments as the model sent them),
+.B approval
+(the answer and how long it took),
+.BR tool\-result ,
+.B tool\-repeat
+(a call answered from history instead of done again),
+.BR mcp\-call ,
+.BR mcp\-result ,
+.BR answer ,
+.B failed
+and
+.BR exit .
+Entries are flushed as they happen, so the log still explains an interrupted
+run, and control characters in bodies and results are escaped, so an event
+cannot span lines or steer the terminal the log is read on.
+The log holds the prompts, any file the model read and any command output
+verbatim, so treat it as being as private as the conversation; the API key is
+not in it, travelling in a header that is not logged.
 .TP
 .B \-\-
 End of options; everything after it is the prompt.

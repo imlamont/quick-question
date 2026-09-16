@@ -76,7 +76,8 @@ sudo make install    # installs bin/qq and share/man/man1/qq.1 under /usr/local
 ## Usage
 
 ```
-qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prompt...
+qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs]
+   [-L file] [--] prompt...
 ```
 
 | Option | Meaning |
@@ -93,6 +94,64 @@ qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prom
 | `-m model` | Override the profile's model |
 | `-s text` | Add extra steering text to the system prompt |
 | `-t secs` | Timeout for the whole call, tool rounds included (default: config `timeout`, else 120) |
+| `-L file` | Append a timestamped log of the whole exchange to `file` (see [Debug log](#debug-log--l)) |
+
+### Debug log (`-L`)
+
+`-L file` appends a line per event, so you can see what `qq` and the model
+actually said to each other. It answers "what did it send?", "what came back?"
+and "which tool ran?" without a proxy in the way.
+
+```
+$ qq -w -L /tmp/qq.log write the current weather to test.txt
+$ cut -c1-90 /tmp/qq.log
+2026-09-16T00:04:22.911-0400 start qq 0.3.0 pid=14987
+2026-09-16T00:04:22.911-0400 profile ol model=hermes3:latest endpoint=http://localhost:11434/v1 tools=w
+2026-09-16T00:04:22.911-0400 timeout 300s
+2026-09-16T00:04:22.914-0400 request http://localhost:11434/v1/chat/completions {"model":"herm
+2026-09-16T00:04:29.980-0400 response 200 7066ms {"id":"chatcmpl-177","object":"chat.completio
+2026-09-16T00:04:29.980-0400 tool-round 0 calls=1
+2026-09-16T00:04:29.980-0400 tool-call write_file {"path":"test.txt","content":"The current we
+2026-09-16T00:04:29.980-0400 approval yes after 1531ms
+2026-09-16T00:04:29.980-0400 tool-result write_file wrote 56 bytes to test.txt
+2026-09-16T00:04:29.981-0400 request http://localhost:11434/v1/chat/completions {"model":"herm
+2026-09-16T00:04:30.593-0400 response 200 612ms {"id":"chatcmpl-971","object":"chat.completion"
+2026-09-16T00:04:30.593-0400 answer The current weather has been successfully written to test.t
+2026-09-16T00:04:30.593-0400 exit 0
+```
+
+Every line starts with a local timestamp to the millisecond and its UTC offset,
+then the event:
+
+| Event | What it records |
+| --- | --- |
+| `start` | version and process id |
+| `profile` | profile name, model, endpoint and the tool flags in force |
+| `timeout` | the limit the whole call has to finish in |
+| `request` | the URL and the **entire** request body, chat and MCP alike |
+| `response` | status, how long it took, and the whole body |
+| `request-failed` | a connection or timeout failure instead of a reply |
+| `tool-round` | which round it is and how many calls the model made |
+| `tool-call` | the tool's name and its arguments as the model sent them |
+| `approval` | `yes`, `no`, `timeout` or `no-terminal`, and how long you took |
+| `tool-result` | what went back to the model |
+| `tool-repeat` | a call answered from history rather than done again |
+| `mcp-call` | the MCP server, the tool, and the gateway URL |
+| `mcp-result` | what the server returned |
+| `answer` | the final text, after `<think>` stripping |
+| `failed` | the error `qq` exits with |
+| `exit` | the exit status |
+
+- Entries are flushed as they happen, so the log still explains a run you
+  interrupt with `^C` or one that times out.
+- The file is appended to, so runs accumulate. Delete it when it gets long.
+- Newlines and other control characters in bodies and results are escaped
+  (`\n`, `\x1b`), so one event is always one line and reading the log can't
+  move your terminal around.
+- **The log is as private as the conversation**: prompts, any file the model
+  read, and any command output are all in it verbatim. Your API key is not,
+  since that travels in a header `qq` doesn't log.
+- A file that can't be opened is a startup error (exit 2) and nothing is sent.
 
 - **Prompt words.** Option parsing stops at the first word that isn't an option, so
   `qq how do I use ls -la` keeps `-la` in the prompt. Use `--` before a prompt that

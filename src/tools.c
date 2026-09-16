@@ -1,4 +1,5 @@
 #include "tools.h"
+#include "log.h"
 #include "proc.h"
 
 #include <cjson/cJSON.h>
@@ -250,18 +251,24 @@ int tools_read_answer(int fd, long long timeout_ms)
  * to ask. The time spent waiting is added to *waited_ms. */
 static int confirm(const char *question, long long *waited_ms)
 {
-	long long start = proc_now_ms();
+	long long start = proc_now_ms(), spent;
 	int fd = open("/dev/tty", O_RDWR | O_CLOEXEC), r;
 
-	if (fd < 0)
+	if (fd < 0) {
+		log_printf("approval no-terminal");
 		return -1;
+	}
 	dprintf(fd, "\n%s\nAllow? [y/N] ", question);
 	r = tools_read_answer(fd, APPROVAL_TIMEOUT_MS);
 	if (r == TOOLS_ANSWER_TIMEOUT)
 		dprintf(fd, "\nqq: no answer after %d seconds, so this was not done\n",
 			APPROVAL_TIMEOUT_MS / 1000);
 	close(fd);
-	*waited_ms += proc_now_ms() - start;
+	spent = proc_now_ms() - start;
+	*waited_ms += spent;
+	log_printf("approval %s after %lldms",
+		   r == TOOLS_ANSWER_YES ? "yes" : r == TOOLS_ANSWER_TIMEOUT ? "timeout" : "no",
+		   spent);
 	return r;
 }
 
@@ -586,17 +593,24 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 	const char *path, *text;
 	struct buf out = {0}, q = {0};
 	int flag = tools_flag(name);
-	cJSON *args;
+	cJSON *args = NULL;
+	char *shown;
 
 	*refused = 0;
+	if (log_on()) {
+		shown = log_escape(cJSON_IsString(raw) ? raw->valuestring : "", cJSON_IsString(raw) ?
+				   strlen(raw->valuestring) : 0);
+		log_printf("tool-call %s %s", name, shown);
+		free(shown);
+	}
 	if (!flag) {
 		buf_appendf(&out, "error: unknown tool \"%s\"", name);
-		return buf_steal(&out);
+		goto done;
 	}
 	if (!(enabled & flag)) {
 		buf_appendf(&out, "error: %s is not enabled; the user can allow it by running qq with -%c",
 			    name, flag_letter(flag));
-		return buf_steal(&out);
+		goto done;
 	}
 
 	/* Arguments normally arrive JSON-encoded in a string; "" means none. */
@@ -605,9 +619,8 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 	else
 		args = cJSON_Duplicate(raw, 1);
 	if (!cJSON_IsObject(args)) {
-		cJSON_Delete(args);
 		buf_puts(&out, "error: tool arguments are not a JSON object");
-		return buf_steal(&out);
+		goto done;
 	}
 
 	if (!strcmp(name, "run_command")) {
@@ -657,5 +670,10 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 done:
 	cJSON_Delete(args);
 	buf_free(&q);
+	if (log_on()) {
+		shown = log_escape(out.data, out.len);
+		log_printf("tool-result %s %s", name, shown);
+		free(shown);
+	}
 	return buf_steal(&out);
 }

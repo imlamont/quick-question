@@ -1,6 +1,7 @@
 /* Unit tests for buf, prompt, config parsing, URL joining, MCP and local tool helpers. */
 #include "buf.h"
 #include "config.h"
+#include "log.h"
 #include "mcp.h"
 #include "openai.h"
 #include "prompt.h"
@@ -330,6 +331,41 @@ static int try_profile(const char *json, const char *name, char *err, size_t err
 	return r;
 }
 
+static void test_log(void)
+{
+	char *s;
+
+	/* Nothing an entry carries may break the line or steer a terminal. */
+	s = log_escape("plain", 5);
+	STREQ(s, "plain");
+	free(s);
+	s = log_escape("a\nb\tc\rd", 7);
+	STREQ(s, "a\\nb\\tc\\rd");
+	free(s);
+	s = log_escape("back\\slash", 10);
+	STREQ(s, "back\\\\slash");
+	free(s);
+	s = log_escape("\033[2Jbell\a", 9);
+	STREQ(s, "\\x1b[2Jbell\\x07");
+	free(s);
+	s = log_escape("del\177", 4);
+	STREQ(s, "del\\x7f");
+	free(s);
+	/* Length is honoured, and a NUL byte is escaped rather than ending it. */
+	s = log_escape("keep\0drop", 9);
+	STREQ(s, "keep\\x00drop");
+	free(s);
+	s = log_escape(NULL, 0);
+	STREQ(s, "");
+	free(s);
+	/* Writing with no log open is a no-op, not a crash. */
+	CHECK(!log_on());
+	log_printf("ignored %d", 1);
+	log_json("ignored", NULL);
+	log_close();
+
+}
+
 static void test_config(void)
 {
 	struct config c = {0};
@@ -459,6 +495,7 @@ int main(void)
 	test_url();
 	test_mcp();
 	test_tools();
+	test_log();
 	test_config();
 
 	printf("unit: %d checks, %d failed\n", checks, failures);

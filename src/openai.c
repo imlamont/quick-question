@@ -1,6 +1,7 @@
 #include "openai.h"
 #include "buf.h"
 #include "http.h"
+#include "log.h"
 #include "mcp.h"
 #include "qq.h"
 #include "tools.h"
@@ -168,7 +169,7 @@ static char *replay(const char *name, const char *earlier)
  * number of calls actually carried out, so a round of nothing but repeats can
  * be told apart from progress. */
 static int run_tools(struct http *c, const char *url, const struct profile *p, int tools,
-		     cJSON *messages, const cJSON *tool_calls, struct history *h)
+		     cJSON *messages, const cJSON *tool_calls, struct history *h, int turn)
 {
 	cJSON *assistant = cJSON_CreateObject();
 	const cJSON *tc;
@@ -179,6 +180,7 @@ static int run_tools(struct http *c, const char *url, const struct profile *p, i
 	cJSON_AddItemToObject(assistant, "tool_calls", cJSON_Duplicate(tool_calls, 1));
 	cJSON_AddItemToArray(messages, assistant);
 
+	log_printf("tool-round %d calls=%d", turn, cJSON_GetArraySize(tool_calls));
 	cJSON_ArrayForEach(tc, tool_calls) {
 		const cJSON *id = cJSON_GetObjectItemCaseSensitive(tc, "id");
 		const cJSON *fn = cJSON_GetObjectItemCaseSensitive(tc, "function");
@@ -193,6 +195,8 @@ static int run_tools(struct http *c, const char *url, const struct profile *p, i
 
 			sig = call_sig(tc);
 			if (sig && (earlier = history_find(h, sig))) {
+				log_printf("tool-repeat %s answered from history",
+					   name->valuestring);
 				result = replay(name->valuestring, earlier);
 			} else {
 				result = tools_call(tc, tools, c->deadline_ms, &waited_ms,
@@ -269,7 +273,8 @@ char *openai_ask(const struct profile *p, const char *system, const char *user,
 			goto out;
 		}
 		if (!run_tools(&c, tool_url, p, tools,
-			       cJSON_GetObjectItemCaseSensitive(req, "messages"), tool_calls, &h)) {
+			       cJSON_GetObjectItemCaseSensitive(req, "messages"), tool_calls, &h,
+			       turn)) {
 			snprintf(err, errlen, "the model kept repeating tool calls it had already "
 					      "made, so qq stopped");
 			goto out;

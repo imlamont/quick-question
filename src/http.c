@@ -1,9 +1,11 @@
 #include "http.h"
+#include "log.h"
 #include "proc.h"
 #include "qq.h"
 
 #include <cjson/cJSON.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define RESPONSE_MAX (16 * 1024 * 1024)
@@ -55,7 +57,7 @@ int http_init(struct http *c, const char *api_key, long timeout, char *err, size
 int http_post_json(struct http *c, const char *url, const cJSON *body, long *status,
 		   struct buf *resp, cJSON **json, char *err, size_t errlen)
 {
-	long long left = c->deadline_ms - proc_now_ms();
+	long long left = c->deadline_ms - proc_now_ms(), sent_ms;
 	CURLcode rc;
 	char *data;
 
@@ -80,14 +82,24 @@ int http_post_json(struct http *c, const char *url, const cJSON *body, long *sta
 	curl_easy_setopt(c->curl, CURLOPT_WRITEDATA, resp);
 	curl_easy_setopt(c->curl, CURLOPT_TIMEOUT_MS, (long)left);
 	c->errbuf[0] = '\0';
+	/* The body only; the Authorization header stays out of the log. */
+	log_printf("request %s %s", url, data);
+	sent_ms = proc_now_ms();
 	rc = curl_easy_perform(c->curl);
 	cJSON_free(data);
 	if (rc != CURLE_OK) {
 		snprintf(err, errlen, "%s: %s", url, *c->errbuf ? c->errbuf : curl_easy_strerror(rc));
+		log_printf("request-failed %s", err);
 		return -1;
 	}
 
 	curl_easy_getinfo(c->curl, CURLINFO_RESPONSE_CODE, status);
+	if (log_on()) {
+		char *shown = log_escape(resp->data, resp->len);
+
+		log_printf("response %ld %lldms %s", *status, proc_now_ms() - sent_ms, shown);
+		free(shown);
+	}
 	*json = cJSON_ParseWithLength(resp->data ? resp->data : "", resp->len);
 	return 0;
 }

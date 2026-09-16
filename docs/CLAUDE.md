@@ -52,7 +52,7 @@ Report actual test output. Don't claim a result you didn't run.
 
 | File | Responsibility |
 |---|---|
-| `src/qq.c` | getopt (`"+hvcrwxd:p:m:s:t:"`), orchestration, output, exit codes |
+| `src/qq.c` | getopt (`"+hlvcrwxd:p:m:s:t:L:"`), orchestration, output, exit codes |
 | `src/config.c` | config path lookup, cJSON parse and validation, `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode) |
 | `src/prompt.c` | system-prompt layering, `-c` environment line, `<stdin>` wrapping, reply cleanup (`<think>` block, trimming) |
 | `src/openai.c` | builds the chat request and runs the tool loop (at most `QQ_MAX_TOOL_ROUNDS`). Local tool calls go to `tools_call`, others to `mcp_call`. Time spent at approval prompts extends the deadline. Keeps a `struct history` of local calls already answered, so repeats are replayed instead of redone. |
@@ -60,11 +60,32 @@ Report actual test output. Don't claim a result you didn't run.
 | `src/mcp.c` | LiteLLM MCP: `tools` array, `<server>-<tool>` name mapping, `POST /mcp-rest/tools/call`, result text |
 | `src/tools.c` | local tools for `-r`/`-w`/`-x`: OpenAI function definitions, the prompt note, dispatch, `tools_inside_cwd` confinement, `/dev/tty` approval, previews with control characters scrubbed, stderr log |
 | `src/proc.c` | child processes for `run_command`: pipes, `fork`/`execvp`, `poll` loop, per-stream output cap, deadline, SIGTERM then SIGKILL; `proc_now_ms` monotonic clock |
+| `src/log.c` | the `-L` debug log: one timestamped line per event, escaping, flushed per entry. A no-op until `log_open` succeeds, which is what lets the logging calls sit anywhere without a guard. |
 | `src/buf.c` | growable NUL-terminated buffer; out of memory is fatal |
 | `src/qq.h` | version, limits, default timeout, round cap |
-| `tests/unit.c` | CHECK/STREQ unit tests for buf, prompt, config, URLs, MCP and tool helpers |
+| `tests/unit.c` | CHECK/STREQ unit tests for buf, prompt, config, URLs, MCP, tool and log helpers |
 | `tests/run.sh` | integration tests against the real binary |
-| `tests/mock_openai.py` | chat and MCP mock; `model` picks the behavior: `empty`, `unauthorized`, `garbage`, `thinker`, `slow`, `tooler`, `twotools`, `looper`, the local-tool callers in `LOCAL`, anything else replies `hello from <model>`. Every request is appended to a JSON-lines log. |
+| `tests/mock_openai.py` | chat and MCP mock; `model` picks the behavior: `empty`, `unauthorized`, `garbage`, `thinker`, `slow`, `tooler`, `twotools`, `looper`, `writeloop`, `readloop`, `mixloop`, `rereader`, the local-tool callers in `LOCAL`, anything else replies `hello from <model>`. Every request is appended to a JSON-lines log. |
+
+- **Debug log** (`src/log.c`, `-L`):
+  - `log_open` appends, and every other entry point does nothing until it has
+    succeeded, so call sites need no `if (logging)` guard. `log_on()` exists only
+    to skip work the log alone would need, such as escaping a large body.
+  - One event per line: `stamp()` writes a local timestamp to the millisecond
+    plus the UTC offset, then the event name and its details. Keep it that way --
+    the format's whole value is that `grep` and `cut` work on it.
+  - Anything that came from the model, a file or a command goes through
+    `log_escape`, which escapes backslashes, newlines and control characters.
+    That keeps an entry on one line and stops escape sequences reaching the
+    terminal the log is later read on, the same reason `tools.c` has
+    `append_preview`.
+  - Entries are flushed as they are written, so an interrupted run still has a
+    usable log.
+  - **Never log a request header.** The body is logged in full, and the API key
+    is only ever a header, which is what keeps it out of the file. `http.c` logs
+    `data` (the serialized body) and nothing else about the request.
+  - The log is otherwise as sensitive as the conversation: prompts, file contents
+    and command output are all in it verbatim. Say so wherever it is documented.
 
 ## Code conventions
 
