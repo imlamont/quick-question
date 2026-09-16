@@ -246,6 +246,8 @@ qq -x how much space is left on this disk
   spinning to the round limit. A write, edit or command that runs clears the
   remembered reads, so re-reading a file after changing it really does read it
   again.
+- MCP calls are recorded the same way, so a model stuck on one search doesn't
+  put the identical query to the server round after round.
 - Each tool that runs is logged on stderr, for example `qq: read_file Makefile`.
 - Time spent waiting at a prompt doesn't count against `-t`.
 - If the model calls a tool whose flag you didn't give, it's told which flag
@@ -394,6 +396,13 @@ different file content, or hunting for a file that was there all along.
 
 If a tool fails (unknown tool, bad arguments, a tool error or a missing server),
 the error goes back to the model as the tool's result so it can recover.
+
+An MCP call repeated with the same arguments isn't sent again: the earlier
+result goes back instead, and a round of nothing but repeats ends the run. A
+model that latches onto one query can otherwise search for it a dozen times in
+a row -- qwen3 asked the same thing eight times in one run here -- which costs
+time and hits the server for nothing, since the answer cannot change in the
+seconds between two identical queries.
 
 MCP tools and local tools can be used together. The loop is capped at 20
 rounds, and `-t` limits the whole exchange. One HTTP connection is reused for

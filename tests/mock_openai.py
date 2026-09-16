@@ -80,8 +80,16 @@ def chat(body):
             call("call-d", "ghost_mcp-anything", '{"x": 1}'),
             call("call-e", "searxng_mcp-web_search", "not json"),
         ])
+    # Never stops, but asks something new each round, so it reaches the round cap
+    # rather than being answered from qq's record of what it already called.
     if model == "looper":
-        return reply(None, [call("call-%d" % len(tool_results), "searxng_mcp-web_search", '{"query": "again"}')])
+        n = len(tool_results)
+        return reply(None, [call("call-%d" % n, "searxng_mcp-web_search",
+                                 '{"query": "again %d"}' % n)])
+    # Never stops and never varies: the same MCP call, round after round.
+    if model == "mcprepeat":
+        return reply(None, [call("call-%d" % len(tool_results), "searxng_mcp-web_search",
+                                 '{"query": "same"}')])
     # Models that never stop asking for the same local tool call, whatever the
     # tool results say. qq must answer the repeats itself instead of asking again.
     if model == "writeloop":

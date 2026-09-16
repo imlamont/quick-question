@@ -159,8 +159,7 @@ static char *replay(const char *name, const char *earlier)
 	struct buf b = {0};
 
 	buf_appendf(&b, "error: you already called %s with exactly these arguments, so qq did "
-		       "not do it again and did not ask the user again. The earlier result was:\n%s",
-		    name, earlier);
+		       "not do it again. The earlier result was:\n%s", name, earlier);
 	return buf_steal(&b);
 }
 
@@ -190,31 +189,35 @@ static int run_tools(struct http *c, const char *url, const struct profile *p, i
 		const char *earlier;
 		cJSON *m;
 
-		if (cJSON_IsString(name) && tools_flag(name->valuestring)) {
-			int flag = tools_flag(name->valuestring), refused = 0;
+		int flag = cJSON_IsString(name) ? tools_flag(name->valuestring) : 0;
+		int refused = 0;
 
-			sig = call_sig(tc);
-			if (sig && (earlier = history_find(h, sig))) {
-				log_printf("tool-repeat %s answered from history",
-					   name->valuestring);
-				result = replay(name->valuestring, earlier);
-			} else {
+		/* Local and MCP calls are remembered alike: a model that repeats
+		 * itself is answered from the record either way, whether that
+		 * spares the user a second approval or the search engine a
+		 * second identical query. */
+		sig = call_sig(tc);
+		if (sig && (earlier = history_find(h, sig))) {
+			log_printf("tool-repeat %s answered from history", name->valuestring);
+			result = replay(name->valuestring, earlier);
+		} else {
+			if (flag) {
 				result = tools_call(tc, tools, c->deadline_ms, &waited_ms,
 						    &refused);
-				done++;
 				/* A write, edit or command that actually ran invalidates
 				 * every remembered read. */
 				if (!refused && flag != TOOLS_READ)
 					history_forget_reads(h);
-				if (sig)
-					history_add(h, sig, result,
-						    !refused && flag == TOOLS_READ);
+			} else {
+				result = mcp_call(c, url, p->mcp_servers, tc);
 			}
-			free(sig);
-		} else {
-			result = mcp_call(c, url, p->mcp_servers, tc);
 			done++;
+			/* Only a local read goes stale when the machine changes; an
+			 * MCP result is not ours to second-guess. */
+			if (sig)
+				history_add(h, sig, result, !refused && flag == TOOLS_READ);
 		}
+		free(sig);
 		/* Time spent at an approval prompt doesn't count against -t. */
 		c->deadline_ms += waited_ms;
 

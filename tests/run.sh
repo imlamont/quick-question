@@ -184,6 +184,18 @@ out_is "tool errors fed back" "results for dogs | error: unknown tool \"other_mc
 q -p tools -m looper go
 expect_rc "tool round limit" 1; err_has "tool round limit" "model still calling tools after 20 rounds"
 
+# An MCP call repeated with the same arguments is answered from the record, so a
+# model stuck on one search doesn't hit the server again and again.
+before=$(grep -c mcp-rest "$T/req.log")
+q -p tools -m mcprepeat go
+expect_rc "repeated mcp call stops" 1
+err_has "repeated mcp call stops" "kept repeating tool calls it had already made"
+true_that "repeated mcp call searched once" \
+	[ "$(($(grep -c mcp-rest "$T/req.log") - before))" -eq 1 ]
+q -p tools -m mcprepeat -L "$T/mcp.log" go
+out=$(<"$T/mcp.log")
+out_has "repeated mcp call is logged" "tool-repeat searxng_mcp-web_search answered from history"
+
 # --- local tools (-r, -w, -x) ----------------------------------------------
 W="$T/ws"
 mkdir -p "$W/sub"

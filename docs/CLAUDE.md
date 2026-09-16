@@ -132,7 +132,8 @@ Report actual test output. Don't claim a result you didn't run.
     logged run it wrote different file content than it had first chosen. With
     `always` the gateway returns every call and `qq` runs it.
   - The gateway therefore runs no tool calls at all; every MCP call goes through
-    `mcp_call` and `POST /mcp-rest/tools/call`.
+    `mcp_call` and `POST /mcp-rest/tools/call`, and through the repeat history
+    on the way.
   - `qq` runs those via `POST <root>/mcp-rest/tools/call` with `{"server_id": S, "name": <bare tool>, "arguments": {...}}`. `server_id` is required, and the server name works as its value.
   - It appends the assistant turn with `tool_calls` and one `role: "tool"` message per call, then asks again.
   - Tool failures go back to the model as `error: ...` rather than aborting.
@@ -163,14 +164,15 @@ Report actual test output. Don't claim a result you didn't run.
       send `{"path":""}`, and it used to reach `opendir("")` as `cannot list :`.
     - `tools_call` sets `*refused` when a prompt was answered no, timed out or
       could not be shown, which is what `openai.c` keys its history on.
-  - Repeated calls (`struct history` in `src/openai.c`): every local call is
-    recorded under `name\x1farguments`, and an identical later call is answered
-    from that record -- not run, not put to the user again -- so a looping model
-    cannot write, read or run the same thing twice, and a refusal holds for the
-    whole run. Entries for reads that succeeded are flagged, and
+  - Repeated calls (`struct history` in `src/openai.c`): every call, local or
+    MCP, is recorded under `name\x1farguments`, and an identical later call is
+    answered from that record -- not run, not put to the user again -- so a
+    looping model cannot write, read or run the same thing twice, cannot put the
+    same query to an MCP server twice, and a refusal holds for the whole run. Entries for reads that succeeded are flagged, and
     `history_forget_reads` drops them as soon as a write, edit or command is
     carried out, so a read that follows a change is really redone; a refusal is
-    never flagged, so it always sticks. `run_tools` returns how many calls it
+    never flagged, so it always sticks, and neither is an MCP result, which runs
+    on the server and is not ours to invalidate from here. `run_tools` returns how many calls it
     really carried out, and a round of nothing but repeats ends the run with an
     error rather than spinning to `QQ_MAX_TOOL_ROUNDS`.
   - **Never add a way to approve without a terminal**, such as an environment

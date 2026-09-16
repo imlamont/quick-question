@@ -207,6 +207,8 @@ of the run: an identical call is refused again without asking.
 Calls that were carried out are remembered the same way, so a model that
 repeats itself cannot write, read or run anything twice, nor be asked about it
 twice; a round containing only repeats ends the run with an error.
+MCP calls are remembered alongside local ones, so an identical query is
+answered from the earlier result rather than put to the server again.
 A write, edit or command that runs discards the remembered reads, so a read
 that follows a change is carried out again.
 Each tool that runs is logged on standard error.
