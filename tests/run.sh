@@ -65,7 +65,7 @@ unset QQ_TEST_KEY
 # --- CLI -------------------------------------------------------------------
 q -h;                 expect_rc "-h" 0; out_has "-h" "usage: qq"; out_has "-h" "-d profile"
 out_has "-h tools" "-r, -w and -x combine"
-q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.1.0"
+q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.2.0"
 q;                    expect_rc "no prompt" 2; err_has "no prompt" "usage:"
 q -z hi;              expect_rc "bad flag" 2
 q -t abc hi;          expect_rc "-t abc" 2; err_has "-t abc" "invalid timeout"

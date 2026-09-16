@@ -42,7 +42,7 @@ Report actual test output. Don't claim a result you didn't run.
   branch, which merges `main`.
 - When bumping the version, keep these in sync:
   - `QQ_VERSION` in `src/qq.h`
-  - the `qq 0.1.0` assertion in `tests/run.sh`
+  - the version assertion in `tests/run.sh`
   - the `.TH` line in `docs/qq.1`
 - The man page `docs/qq.1` documents options, local tools, config keys and
   exit codes. Update it whenever any of those change.

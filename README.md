@@ -39,7 +39,7 @@ install on Ubuntu 24.04 or newer and comparable Debian releases. `apt`
 installs the libcurl and cJSON libraries they need.
 
 ```sh
-sudo apt install ./quick-question_0.1.0-1_amd64.deb
+sudo apt install ./quick-question_0.2.0-1_amd64.deb
 qq -v
 ```
 
