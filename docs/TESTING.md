@@ -75,6 +75,7 @@ the requested model picks its behavior.
 | CLI | `-h`, `-v`, no prompt (exit 2), bad flag, bad `-t`, `-p` without a value, unknown profile, missing config, invalid JSON |
 | stdin | pipe plus prompt, pipe only, 300 KB round trip, more than 1 MiB rejected (exit 2) |
 | Requests | request path, Bearer header present or absent, roles and content, `temperature` / `max_tokens` / `stream`, no `tools` key without `mcp_servers`, `<think>` stripped, HTTP 401 message shown, non-JSON body, connection refused, request timeout |
+| repeated tool calls | a model looping on one `write_file`: asked once, the first write happens, the run ends with "kept repeating tool calls"; a denial holds so nothing is written and nothing is asked twice; a repeat beside a fresh call still reaches the round cap but is asked once; a looping `read_file` stops the same way; a read repeated after an edit is really redone and sees the new content |
 | MCP tool loop | `tools` array sent; the tool-call request body (`server_id`, bare `name`, parsed `arguments`); history roles and matching `tool_call_id`; exactly 3 requests for one tool round; tool errors fed back to the model (unknown tool, `isError`, HTTP 404 from the server, arguments that aren't JSON); an 8-round limit (exit 1) |
 | `-d` | rewrites `default`, follows a symlink, keeps file mode 600, leaves no temp files; the new default is used; an unknown profile leaves the file byte-for-byte identical; `-p` wins over a default just set in the same call; the default persists |
 

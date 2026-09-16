@@ -78,6 +78,31 @@ def chat(body):
         ])
     if model == "looper":
         return reply(None, [call("call-%d" % len(tool_results), "searxng_mcp-web_search", '{"query": "again"}')])
+    # Models that never stop asking for the same local tool call, whatever the
+    # tool results say. qq must answer the repeats itself instead of asking again.
+    if model == "writeloop":
+        return reply(None, [call("call-%d" % len(tool_results), "write_file",
+                                 json.dumps({"path": "out.txt", "content": "written by model\n"}))])
+    # A call it repeats forever next to one that is new every round, so the loop
+    # keeps making progress while the repeat must still be asked about only once.
+    if model == "mixloop":
+        n = len(tool_results)
+        return reply(None, [call("call-w%d" % n, "write_file",
+                                 json.dumps({"path": "out.txt", "content": "written by model\n"})),
+                            call("call-s%d" % n, "search_files",
+                                 json.dumps({"pattern": "p%d" % n}))])
+    if model == "readloop":
+        return reply(None, [call("call-%d" % len(tool_results), "read_file",
+                                 json.dumps({"path": "notes.txt"}))])
+    # write, read, edit, then the same read again: the second read must really
+    # happen, because the edit made the remembered one stale.
+    if model == "rereader":
+        steps = [local("write_file", path="r.txt", content="one\n"),
+                 local("read_file", path="r.txt"),
+                 local("edit_file", path="r.txt", old_text="one", new_text="two"),
+                 local("read_file", path="r.txt")]
+        n = len(tool_results)
+        return reply(" | ".join(tool_results)) if n >= len(steps) else reply(None, [steps[n]])
     return reply(f"hello from {model}")
 
 

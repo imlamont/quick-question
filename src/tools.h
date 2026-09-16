@@ -35,10 +35,12 @@ int tools_read_answer(int fd, long long timeout_ms);
 
 /* Run one assistant tool_call for a local tool. Time spent waiting for the
  * user's approval is added to *waited_ms; commands are killed at deadline_ms
- * plus that time. Always returns malloc'd text for the tool message, starting
+ * plus that time. *refused is set when an approval prompt was answered no,
+ * timed out, or could not be shown, so the caller can reuse that answer rather
+ * than ask again. Always returns malloc'd text for the tool message, starting
  * with "error: " when nothing was done. */
 char *tools_call(const struct cJSON *tool_call, int enabled, long long deadline_ms,
-		 long long *waited_ms);
+		 long long *waited_ms, int *refused);
 
 /* 1 if path resolves inside the working directory, following symlinks. A path
  * that doesn't exist yet is judged by its parent directory. */

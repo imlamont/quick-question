@@ -265,14 +265,16 @@ static int confirm(const char *question, long long *waited_ms)
 	return r;
 }
 
-/* Ask the question in q (then freed). On refusal, explain why in out. */
-static int allowed(struct buf *q, long long *waited_ms, struct buf *out)
+/* Ask the question in q (then freed). On refusal, explain why in out and set
+ * *refused, which tells the caller not to ask this again. */
+static int allowed(struct buf *q, long long *waited_ms, struct buf *out, int *refused)
 {
 	int r = confirm(q->data, waited_ms);
 
 	buf_free(q);
 	if (r == TOOLS_ANSWER_YES)
 		return 1;
+	*refused = 1;
 	if (r == TOOLS_ANSWER_TIMEOUT)
 		buf_appendf(out, "error: not done: the user did not answer within %d seconds",
 			    APPROVAL_TIMEOUT_MS / 1000);
@@ -512,7 +514,7 @@ static const char *arg_str(const cJSON *args, const char *key)
 }
 
 static void write_file(const char *path, const cJSON *args, long long *waited_ms,
-		       struct buf *out)
+		       struct buf *out, int *refused)
 {
 	const char *content = arg_str(args, "content");
 	struct buf q = {0};
@@ -527,7 +529,7 @@ static void write_file(const char *path, const cJSON *args, long long *waited_ms
 	buf_appendf(&q, " (%zu bytes%s):\n", strlen(content),
 		    stat(path, &st) ? "" : ", replacing the existing file");
 	append_preview(&q, content, PREVIEW_MAX, 1);
-	if (!allowed(&q, waited_ms, out))
+	if (!allowed(&q, waited_ms, out, refused))
 		return;
 	note("write_file", path);
 	if (!save(path, content, strlen(content), out))
@@ -535,7 +537,7 @@ static void write_file(const char *path, const cJSON *args, long long *waited_ms
 }
 
 static void edit_file(const char *path, const cJSON *args, long long *waited_ms,
-		      struct buf *out)
+		      struct buf *out, int *refused)
 {
 	const char *old_text = arg_str(args, "old_text"), *new_text = arg_str(args, "new_text");
 	struct buf data = {0}, q = {0};
@@ -564,7 +566,7 @@ static void edit_file(const char *path, const cJSON *args, long long *waited_ms,
 	append_preview(&q, old_text, PREVIEW_MAX, 1);
 	buf_puts(&q, "\nwith:\n");
 	append_preview(&q, new_text, PREVIEW_MAX, 1);
-	if (!allowed(&q, waited_ms, out))
+	if (!allowed(&q, waited_ms, out, refused))
 		goto done;
 	note("edit_file", path);
 	if (!save(path, edited, strlen(edited), out))
@@ -575,7 +577,7 @@ done:
 }
 
 char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
-		 long long *waited_ms)
+		 long long *waited_ms, int *refused)
 {
 	const cJSON *fn = cJSON_GetObjectItemCaseSensitive(tool_call, "function");
 	const cJSON *name_item = cJSON_GetObjectItemCaseSensitive(fn, "name");
@@ -586,6 +588,7 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 	int flag = tools_flag(name);
 	cJSON *args;
 
+	*refused = 0;
 	if (!flag) {
 		buf_appendf(&out, "error: unknown tool \"%s\"", name);
 		return buf_steal(&out);
@@ -613,7 +616,7 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 		} else {
 			buf_puts(&q, "qq: the model wants to run a command:\n$ ");
 			append_preview(&q, text, PREVIEW_MAX, 1);
-			if (allowed(&q, waited_ms, &out)) {
+			if (allowed(&q, waited_ms, &out, refused)) {
 				note("run_command", text);
 				run_command(text, deadline_ms + *waited_ms, &out);
 			}
@@ -627,9 +630,9 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 	if (!path) {
 		buf_puts(&out, "error: missing \"path\" argument");
 	} else if (!strcmp(name, "write_file")) {
-		write_file(path, args, waited_ms, &out);
+		write_file(path, args, waited_ms, &out, refused);
 	} else if (!strcmp(name, "edit_file")) {
-		edit_file(path, args, waited_ms, &out);
+		edit_file(path, args, waited_ms, &out, refused);
 	} else {
 		text = arg_str(args, "pattern");
 		if (!strcmp(name, "search_files") && (!text || !*text)) {
@@ -640,7 +643,7 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 			buf_appendf(&q, "qq: the model wants to use %s outside the current directory:\n",
 				    name);
 			append_preview(&q, path, 300, 0);
-			if (!allowed(&q, waited_ms, &out))
+			if (!allowed(&q, waited_ms, &out, refused))
 				goto done;
 		}
 		note(name, path);

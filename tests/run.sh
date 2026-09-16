@@ -239,6 +239,45 @@ qtty 'y\n' -p lt -w -m writer go
 expect_rc "write approved" 0; out_has "write approved" "wrote 17 bytes to out.txt"
 true_that "approved write happened" [ "$(cat "$W/out.txt")" = "written by model" ]
 
+# A model that keeps asking for the same call is answered from qq's own history,
+# so the user is asked once and the loop ends instead of spinning to the cap.
+asked() { grep -c "Allow?" <<<"$out"; }
+rm -f "$W/out.txt"
+qtty 'y\ny\ny\ny\ny\n' -p lt -w -m writeloop go
+expect_rc "repeated write stops" 1
+err_has "repeated write stops" "kept repeating tool calls it had already made"
+true_that "repeated write asked once" [ "$(asked)" -eq 1 ]
+true_that "first repeated write happened" [ "$(cat "$W/out.txt")" = "written by model" ]
+
+rm -f "$W/out.txt"
+qtty 'n\nn\nn\nn\nn\n' -p lt -w -m writeloop go
+expect_rc "denial holds for repeats" 1
+true_that "denied repeat asked once" [ "$(asked)" -eq 1 ]
+true_that "denied repeat never written" [ ! -e "$W/out.txt" ]
+
+# A repeat alongside a fresh call still makes progress, so the loop runs to the
+# cap, but the repeat is never put to the user a second time.
+rm -f "$W/out.txt"
+qtty 'y\ny\ny\ny\ny\n' -p lt -rw -m mixloop go
+expect_rc "repeat beside new call" 1
+err_has "repeat beside new call" "model still calling tools after 20 rounds"
+true_that "repeat beside new call asked once" [ "$(asked)" -eq 1 ]
+
+# Repeated reads are answered from the history too, so a model stuck on one read
+# stops instead of spinning through every round.
+qws -p lt -r -m readloop look
+expect_rc "repeated read stops" 1
+err_has "repeated read stops" "kept repeating tool calls it had already made"
+
+# ... but a change makes a remembered read stale, so the same read after an edit
+# is really done again and sees the new content.
+rm -f "$W/r.txt"
+qtty 'y\ny\n' -p lt -rw -m rereader go
+expect_rc "read after edit" 0
+out_has "read after edit is done again" "edited r.txt"
+out_lacks "read after edit is not replayed" "you already called read_file"
+out_has "read after edit sees the change" "two"
+
 qws -p lt -w -m editor2 go
 out_has "ambiguous edit refused before asking" "old_text occurs 2 times in notes.txt"
 qtty 'y\n' -p lt -w -m editor go

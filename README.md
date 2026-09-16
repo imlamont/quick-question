@@ -139,7 +139,15 @@ qq -x how much space is left on this disk
   job, the action is refused. An unanswered prompt is refused after 120
   seconds, so a run you walk away from ends instead of waiting forever.
 - A refusal goes back to the model as the tool's result, telling it not to
-  retry.
+  retry, and it sticks: if the model asks for that exact call again, `qq`
+  repeats the refusal itself rather than putting it to you a second time.
+- The same holds for calls that were allowed. A model that loops on one call --
+  some local models do -- is answered from `qq`'s own record of what it already
+  did, so nothing is written, read or run twice and you are asked only once.
+  When a whole round is nothing but repeats, `qq` stops with an error instead of
+  spinning to the round limit. A write, edit or command that runs clears the
+  remembered reads, so re-reading a file after changing it really does read it
+  again.
 - Each tool that runs is logged on stderr, for example `qq: read_file Makefile`.
 - Time spent waiting at a prompt doesn't count against `-t`.
 - If the model calls a tool whose flag you didn't give, it's told which flag

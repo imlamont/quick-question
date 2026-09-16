@@ -55,7 +55,7 @@ Report actual test output. Don't claim a result you didn't run.
 | `src/qq.c` | getopt (`"+hvcrwxd:p:m:s:t:"`), orchestration, output, exit codes |
 | `src/config.c` | config path lookup, cJSON parse and validation, `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode) |
 | `src/prompt.c` | system-prompt layering, `-c` environment line, `<stdin>` wrapping, reply cleanup (`<think>` block, trimming) |
-| `src/openai.c` | builds the chat request and runs the tool loop (at most `QQ_MAX_TOOL_ROUNDS`). Local tool calls go to `tools_call`, others to `mcp_call`. Time spent at approval prompts extends the deadline. |
+| `src/openai.c` | builds the chat request and runs the tool loop (at most `QQ_MAX_TOOL_ROUNDS`). Local tool calls go to `tools_call`, others to `mcp_call`. Time spent at approval prompts extends the deadline. Keeps a `struct history` of local calls already answered, so repeats are replayed instead of redone. |
 | `src/http.c` | one reused libcurl handle, JSON POST, one deadline for the whole call, error-message extraction |
 | `src/mcp.c` | LiteLLM MCP: `tools` array, `<server>-<tool>` name mapping, `POST /mcp-rest/tools/call`, result text |
 | `src/tools.c` | local tools for `-r`/`-w`/`-x`: OpenAI function definitions, the prompt note, dispatch, `tools_inside_cwd` confinement, `/dev/tty` approval, previews with control characters scrubbed, stderr log |
@@ -117,6 +117,18 @@ Report actual test output. Don't claim a result you didn't run.
       unanswered for `APPROVAL_TIMEOUT_MS` (120 s). Waiting doesn't count
       against `-t`, so without that limit an unattended run would hang.
     - `edit_file` checks that `old_text` occurs exactly once *before* asking.
+    - `tools_call` sets `*refused` when a prompt was answered no, timed out or
+      could not be shown, which is what `openai.c` keys its history on.
+  - Repeated calls (`struct history` in `src/openai.c`): every local call is
+    recorded under `name\x1farguments`, and an identical later call is answered
+    from that record -- not run, not put to the user again -- so a looping model
+    cannot write, read or run the same thing twice, and a refusal holds for the
+    whole run. Entries for reads that succeeded are flagged, and
+    `history_forget_reads` drops them as soon as a write, edit or command is
+    carried out, so a read that follows a change is really redone; a refusal is
+    never flagged, so it always sticks. `run_tools` returns how many calls it
+    really carried out, and a round of nothing but repeats ends the run with an
+    error rather than spinning to `QQ_MAX_TOOL_ROUNDS`.
   - **Never add a way to approve without a terminal**, such as an environment
     variable, a config key or a "yes to all" flag, unless the owner explicitly
     asks. The tests answer prompts through a pseudo-terminal instead.
