@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 struct cJSON;
+struct buf;
 
 /* An OpenAI-compatible endpoint. All strings point into the config's cJSON
  * tree (or argv for overrides); optional ones are NULL when absent or empty. */
@@ -37,6 +38,11 @@ int config_parse(struct config *c, const char *json, size_t len, char *err, size
 /* Resolve a profile by name, or the default when name is NULL. */
 int config_profile(const struct config *c, const char *name, struct profile *p,
 		   char *err, size_t errlen);
+
+/* Append one profile name per line to out, in config order, marking the one
+ * that would be used with "* ". That is active, or the default when active is
+ * NULL. Profiles are not validated, so a broken one still gets listed. */
+void config_list(const struct config *c, const char *active, struct buf *out);
 
 /* Set "default" to name and atomically rewrite the file at path.
  * Returns -1 for an invalid profile, -2 for I/O errors. */

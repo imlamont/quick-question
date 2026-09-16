@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 static const char usage[] =
-	"usage: qq [-hcrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prompt...\n";
+	"usage: qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prompt...\n";
 
 static const char help[] =
 	"\n"
@@ -22,6 +22,7 @@ static const char help[] =
 	"options:\n"
 	"  -h          show this help\n"
 	"  -v          show version\n"
+	"  -l          list profile names, marking the one that would be used\n"
 	"  -c          include shell context (OS, shell, cwd) in the prompt\n"
 	"  -r          let the model read files (read_file, list_directory, search_files)\n"
 	"  -w          let the model create and edit files (write_file, edit_file)\n"
@@ -56,14 +57,15 @@ int main(int argc, char **argv)
 	const char *opt_profile = NULL, *opt_default = NULL, *opt_model = NULL, *opt_system = NULL;
 	const char *parts[6];
 	long opt_timeout = 0, timeout;
-	int opt_context = 0, opt_tools = 0, ch, r, rc = 2;
+	int opt_context = 0, opt_tools = 0, opt_list = 0, ch, r, rc = 2;
 	char err[1024] = "", *path = NULL, *reply = NULL, *text;
 	struct buf prompt = {0}, input = {0}, context = {0}, tools = {0}, sys = {0}, user = {0};
+	struct buf list = {0};
 	struct config cfg = {0};
 	struct profile prof;
 
 	/* '+' stops at the first non-option, so "qq how do I ls -la" keeps -la. */
-	while ((ch = getopt(argc, argv, "+hvcrwxd:p:m:s:t:")) != -1) {
+	while ((ch = getopt(argc, argv, "+hlvcrwxd:p:m:s:t:")) != -1) {
 		switch (ch) {
 		case 'h':
 			fputs(usage, stdout);
@@ -72,6 +74,9 @@ int main(int argc, char **argv)
 		case 'v':
 			puts("qq " QQ_VERSION);
 			return 0;
+		case 'l':
+			opt_list = 1;
+			break;
 		case 'c':
 			opt_context = 1;
 			break;
@@ -110,7 +115,7 @@ int main(int argc, char **argv)
 			buf_puts(&prompt, " ");
 		buf_puts(&prompt, argv[i]);
 	}
-	if (!prompt.len && !opt_default && isatty(STDIN_FILENO)) {
+	if (!prompt.len && !opt_default && !opt_list && isatty(STDIN_FILENO)) {
 		fputs(usage, stderr);
 		goto out;
 	}
@@ -127,11 +132,23 @@ int main(int argc, char **argv)
 			goto fail;
 		}
 		fprintf(stderr, "qq: default profile set to %s\n", opt_default);
-		if (!prompt.len) {
+		if (!prompt.len && !opt_list) {
 			rc = 0;
 			goto out;
 		}
 	}
+	/* Listing is a query, like -h: it reports and exits, prompt or not. */
+	if (opt_list) {
+		config_list(&cfg, opt_profile, &list);
+		if (list.data && (fputs(list.data, stdout) == EOF || fflush(stdout) == EOF)) {
+			rc = 1;
+			snprintf(err, sizeof err, "write error: %s", strerror(errno));
+			goto fail;
+		}
+		rc = 0;
+		goto out;
+	}
+
 	if (config_profile(&cfg, opt_profile, &prof, err, sizeof err))
 		goto fail;
 	if (opt_model && *opt_model)
@@ -200,5 +217,6 @@ out:
 	buf_free(&tools);
 	buf_free(&sys);
 	buf_free(&user);
+	buf_free(&list);
 	return rc;
 }

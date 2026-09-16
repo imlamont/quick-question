@@ -1,9 +1,9 @@
-.TH QQ 1 "2026-09-15" "qq 0.2.0" "User Commands"
+.TH QQ 1 "2026-09-15" "qq 0.3.0" "User Commands"
 .SH NAME
 qq \- ask an AI model a quick question
 .SH SYNOPSIS
 .B qq
-.RB [ \-hcrvwx ]
+.RB [ \-hclrvwx ]
 .RB [ \-d
 .IR profile ]
 .RB [ \-p
@@ -47,6 +47,15 @@ Print usage and exit.
 .TP
 .B \-v
 Print the version and exit.
+.TP
+.B \-l
+List the names of the configured profiles, one per line, in the order they
+appear in the file, and exit. The profile that would be used is marked with
+.RB \(lq "* " \(rq,
+which is the one named by
+.B \-p
+when it is given, and the default otherwise. Profiles are not validated, so
+one that would fail to run is still listed.
 .TP
 .B \-c
 Add a line describing the environment (operating system, shell, current
@@ -174,7 +183,10 @@ and
 .BR model .
 It also accepts
 .BR api_key_env ,
-the name of an environment variable that holds a bearer token, and
+the name of an environment variable that holds a bearer token \(em the
+variable itself, not the key, and it must be set to a non-empty value or
+.B qq
+exits 2 \(em and
 .BR temperature ,
 .BR max_tokens ,
 .B system_prompt
@@ -216,7 +228,10 @@ Reported by
 .PP
 API keys are read from the environment variable named by a profile's
 .BR api_key_env .
-They are never stored in the configuration file.
+They are never stored in the configuration file. A profile that names a
+variable which is unset or empty is a configuration error; omit
+.B api_key_env
+for an endpoint that needs no key.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -236,6 +251,7 @@ qq \-r what does the debug target in the Makefile do
 qq \-rw add a clean target to the Makefile
 qq \-p litellm \-m nemotron\-3\-super \-s "Reply in French." say hello
 qq \-d litellm
+qq \-l
 .fi
 .SH SEE ALSO
 The

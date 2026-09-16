@@ -39,7 +39,7 @@ install on Ubuntu 24.04 or newer and comparable Debian releases. `apt`
 installs the libcurl and cJSON libraries they need.
 
 ```sh
-sudo apt install ./quick-question_0.2.0-1_amd64.deb
+sudo apt install ./quick-question_0.3.0-1_amd64.deb
 qq -v
 ```
 
@@ -76,13 +76,14 @@ sudo make install    # installs bin/qq and share/man/man1/qq.1 under /usr/local
 ## Usage
 
 ```
-qq [-hcrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prompt...
+qq [-hclrvwx] [-d profile] [-p profile] [-m model] [-s text] [-t secs] [--] prompt...
 ```
 
 | Option | Meaning |
 |---|---|
 | `-h` | Show help |
 | `-v` | Show version |
+| `-l` | List profile names, marking with `*` the one that would be used |
 | `-c` | Add shell context (OS, shell, working directory) to the prompt |
 | `-r` | Let the model read files (see [Local tools](#local-tools--r--w--x)) |
 | `-w` | Let the model create and edit files |
@@ -219,7 +220,7 @@ durable option.
 |---|---|
 | `endpoint` | Base URL; `/chat/completions` is added unless it's already there. **Required.** |
 | `model` | Model name. **Required.** |
-| `api_key_env` | Name of the environment variable that holds the key, sent as `Authorization: Bearer`. Keys never go in the file. |
+| `api_key_env` | Name of the environment variable that holds the key, sent as `Authorization: Bearer`. Keys never go in the file, and naming a variable that is unset or empty is an error (exit 2). Omit the key entirely for an endpoint that needs no auth. |
 | `temperature`, `max_tokens` | Passed through when set |
 | `system_prompt` | Steering for this profile |
 | `mcp_servers` | LiteLLM MCP server names to offer as tools (see below) |

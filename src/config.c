@@ -166,6 +166,18 @@ int config_profile(const struct config *c, const char *name, struct profile *p,
 	if (!p->endpoint || !p->model)
 		return fail(err, errlen, "%sa profile requires \"endpoint\" and \"model\"", where);
 
+	/* "api_key_env" is a variable name, not the key. Catch the mix-up here:
+	 * otherwise no Authorization header goes out and the endpoint's reply to
+	 * an unauthenticated request is the only clue. */
+	if (p->api_key_env) {
+		const char *key = getenv(p->api_key_env);
+
+		if (!key || !*key)
+			return fail(err, errlen,
+				    "%s\"api_key_env\" names environment variable %s, which is %s",
+				    where, p->api_key_env, key ? "empty" : "not set");
+	}
+
 	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "temperature"))) {
 		if (!cJSON_IsNumber(it))
 			return fail(err, errlen, "%s\"temperature\" must be a number", where);
@@ -206,6 +218,20 @@ static int write_all(int fd, const char *s, size_t n)
 		n -= (size_t)w;
 	}
 	return 0;
+}
+
+void config_list(const struct config *c, const char *active, struct buf *out)
+{
+	const cJSON *profiles = cJSON_GetObjectItemCaseSensitive(c->root, "profiles");
+	const cJSON *it;
+
+	if (!active)
+		active = c->default_profile;
+	cJSON_ArrayForEach(it, profiles)
+		if (cJSON_IsObject(it))
+			buf_appendf(out, "%s%s\n",
+				    active && !strcmp(it->string, active) ? "* " : "  ",
+				    it->string);
 }
 
 int config_set_default(struct config *c, const char *path, const char *name,

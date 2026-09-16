@@ -55,23 +55,35 @@ cat >"$T/config.json" <<EOF
     "down":   { "endpoint": "http://127.0.0.1:9/v1", "model": "m" },
     "tools":  { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "tooler",
                 "mcp_servers": ["searxng_mcp", "ghost_mcp"] },
-    "lt":     { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "reader" }
+    "lt":     { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "reader" },
+    "nokey":  { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "test-model",
+                "api_key_env": "QQ_MISSING_KEY" }
   }
 }
 EOF
 export QQ_CONFIG="$T/config.json"
-unset QQ_TEST_KEY
+export QQ_TEST_KEY=sk-test
+unset QQ_MISSING_KEY
 
 # --- CLI -------------------------------------------------------------------
 q -h;                 expect_rc "-h" 0; out_has "-h" "usage: qq"; out_has "-h" "-d profile"
 out_has "-h tools" "-r, -w and -x combine"
-q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.2.0"
+out_has "-h usage flags" "qq [-hclrvwx]"
+out_has "-h lists -l" "-l          list profile names"
+q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.3.0"
+
+q -l;                 expect_rc "-l" 0
+out_is "-l marks the default" $'* local\n  alt\n  down\n  tools\n  lt\n  nokey'
+q -p alt -l;          expect_rc "-p -l" 0; out_has "-l marks -p" "* alt"
+out_lacks "-l marks only -p" "* local"
+q -l hi;              expect_rc "-l with a prompt" 0; out_has "-l with a prompt" "* local"
+q -p nokey -l;        expect_rc "-l skips profile validation" 0; out_has "-l skips profile validation" "* nokey"
 q;                    expect_rc "no prompt" 2; err_has "no prompt" "usage:"
 q -z hi;              expect_rc "bad flag" 2
 q -t abc hi;          expect_rc "-t abc" 2; err_has "-t abc" "invalid timeout"
 q -t 0 hi;            expect_rc "-t 0" 2
 q -p;                 expect_rc "-p without value" 2
-q -p nope hi;         expect_rc "unknown profile" 2; err_has "unknown profile" "available: local, alt, down, tools, lt"
+q -p nope hi;         expect_rc "unknown profile" 2; err_has "unknown profile" "available: local, alt, down, tools, lt, nokey"
 
 QQ_CONFIG="$T/missing.json" "$QQ" hi </dev/null 2>"$T/stderr"; rc=$?; err=$(<"$T/stderr"); out=
 expect_rc "missing config" 2; err_has "missing config" "config not found"
@@ -127,9 +139,13 @@ out=$(req '(d["body"]["temperature"], d["body"]["max_tokens"], d["body"]["stream
 out_is "request params" "(0.25, 64, False)"
 out=$(req '"tools" in d["body"]');              out_is "no tools without mcp_servers or flags" "False"
 
-q -p local hi;        expect_rc "no key" 0
-out=$(req 'd["auth"]'); out_is "no auth header without key" "None"
+q -p nokey hi;        expect_rc "api_key_env not set" 2
+err_has "api_key_env not set" 'profile "nokey": "api_key_env" names environment variable QQ_MISSING_KEY, which is not set'
+QQ_MISSING_KEY= "$QQ" -p nokey hi </dev/null 2>"$T/stderr"; rc=$?; err=$(<"$T/stderr")
+expect_rc "api_key_env empty" 2; err_has "api_key_env empty" "variable QQ_MISSING_KEY, which is empty"
+
 q -p alt hi;          expect_rc "profile without backend key" 0; out_is "profile without backend key" "hello from alt-model"
+out=$(req 'd["auth"]'); out_is "no auth header without api_key_env" "None"
 
 q -m thinker hi;      out_is "think stripped" "thought answer"
 q -m unauthorized hi; expect_rc "HTTP 401" 1; err_has "HTTP 401" "HTTP 401: invalid api key"
@@ -254,6 +270,8 @@ true_that "-d keeps symlink" [ -L "$T/link.json" ]
 true_that "-d keeps mode" [ "$(stat -c %a "$T/d.json")" = 600 ]
 true_that "-d leaves no temp files" [ -z "$(find "$T" -name '.qq-config.*')" ]
 q hi;                 out_is "new default used" "hello from alt-model"
+q -d local -l;        expect_rc "-d with -l" 0; out_has "-d -l marks the new default" "* local"
+q -d alt;             expect_rc "-d alt again" 0
 
 cp "$T/d.json" "$T/before.json"
 q -d nope

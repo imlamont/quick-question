@@ -44,6 +44,7 @@ Report actual test output. Don't claim a result you didn't run.
   - `QQ_VERSION` in `src/qq.h`
   - the version assertion in `tests/run.sh`
   - the `.TH` line in `docs/qq.1`
+  - the `.deb` filename in the README's download example
 - The man page `docs/qq.1` documents options, local tools, config keys and
   exit codes. Update it whenever any of those change.
 
