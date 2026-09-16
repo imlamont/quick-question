@@ -16,6 +16,8 @@ struct profile {
 	const char *system_prompt;
 	double temperature;        /* NAN when unset */
 	int max_tokens;            /* 0 when unset */
+	int tools;                 /* "tools": false forbids -r, -w and -x */
+	int mcp;                   /* "mcp": false ignores "mcp_servers" */
 	const struct cJSON *mcp_servers; /* non-empty array of names, or NULL */
 };
 

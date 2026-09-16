@@ -53,7 +53,7 @@ Report actual test output. Don't claim a result you didn't run.
 | File | Responsibility |
 |---|---|
 | `src/qq.c` | getopt (`"+hlvcrwxd:p:m:s:t:L:"`), orchestration, output, exit codes |
-| `src/config.c` | config path lookup, cJSON parse and validation, `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode) |
+| `src/config.c` | config path lookup, cJSON parse and validation, the `tools`/`mcp` profile switches, `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode) |
 | `src/prompt.c` | system-prompt layering, `-c` environment line, `<stdin>` wrapping, reply cleanup (`<think>` block, trimming) |
 | `src/openai.c` | builds the chat request and runs the tool loop (at most `QQ_MAX_TOOL_ROUNDS`). Local tool calls go to `tools_call`, others to `mcp_call`. Time spent at approval prompts extends the deadline. Keeps a `struct history` of local calls already answered, so repeats are replayed instead of redone. |
 | `src/http.c` | one reused libcurl handle, JSON POST, one deadline for the whole call, error-message extraction |
@@ -123,12 +123,29 @@ Report actual test output. Don't claim a result you didn't run.
 - **Timeout** (`-t` or config `timeout`) is one deadline for the whole call:
   every chat request, every tool call, and `run_command`.
 - **LiteLLM MCP loop**:
-  - A profile's `mcp_servers` are sent as `{"type":"mcp","server_label":S,"server_url":"litellm_proxy/mcp/S","require_approval":"never"}`.
-  - The proxy runs **one** round of tool calls itself, then returns the rest as `tool_calls` with `content: null`.
+  - A profile's `mcp_servers` are sent as `{"type":"mcp","server_label":S,"server_url":"litellm_proxy/mcp/S","require_approval":"always"}`.
+  - **`require_approval` must stay `always`.** With `never` the gateway executes
+    tool calls itself, and it does not stop at MCP tools: it also tried to run
+    `write_file`, `read_file` and `run_command`, failed, and fed the model
+    `Error executing tool: 'write_file'` for calls `qq` then carried out. The
+    model reasoned from that phantom failure and changed its behaviour -- in one
+    logged run it wrote different file content than it had first chosen. With
+    `always` the gateway returns every call and `qq` runs it.
+  - The gateway therefore runs no tool calls at all; every MCP call goes through
+    `mcp_call` and `POST /mcp-rest/tools/call`.
   - `qq` runs those via `POST <root>/mcp-rest/tools/call` with `{"server_id": S, "name": <bare tool>, "arguments": {...}}`. `server_id` is required, and the server name works as its value.
   - It appends the assistant turn with `tool_calls` and one `role: "tool"` message per call, then asks again.
   - Tool failures go back to the model as `error: ...` rather than aborting.
   - `arguments` arrives as a JSON string; `""` means `{}`.
+- **Profile switches** (`config.c`): `tools` and `mcp` are read with `get_bool`,
+  which leaves the value alone unless the member is a real JSON boolean, so
+  absent and `null` both mean "on". Defaults are set in the `struct profile`
+  initializer, not in the parser. `"mcp": false` simply leaves `mcp_servers`
+  NULL, which the rest of the code already handles; `"tools": false` is checked
+  in `qq.c`, which **errors** (exit 2) when a tool flag was given rather than
+  ignoring it, because the flag was typed on purpose. Keep that asymmetry: a
+  silenced MCP list is a setting, a silenced `-x` is a surprise.
+
 - **Local tools** (`src/tools.c`):
   - The flags are `-r` (`read_file`, `list_directory`, `search_files`), `-w`
     (`write_file`, `edit_file`) and `-x` (`run_command`). They OR into a
@@ -141,6 +158,9 @@ Report actual test output. Don't claim a result you didn't run.
       unanswered for `APPROVAL_TIMEOUT_MS` (120 s). Waiting doesn't count
       against `-t`, so without that limit an unattended run would hang.
     - `edit_file` checks that `old_text` occurs exactly once *before* asking.
+    - An empty `"path"` is treated as no path at all, so `list_directory` and
+      `search_files` fall back to `.` as their descriptions promise. Models do
+      send `{"path":""}`, and it used to reach `opendir("")` as `cannot list :`.
     - `tools_call` sets `*refused` when a prompt was answered no, timed out or
       could not be shown, which is what `openai.c` keys its history on.
   - Repeated calls (`struct history` in `src/openai.c`): every local call is

@@ -20,7 +20,12 @@ void mcp_add_tools(cJSON *req, const cJSON *servers)
 		cJSON_AddStringToObject(t, "type", "mcp");
 		cJSON_AddStringToObject(t, "server_label", s->valuestring);
 		cJSON_AddStringToObject(t, "server_url", url.data);
-		cJSON_AddStringToObject(t, "require_approval", "never");
+		/* "always" means the gateway hands every tool call back instead of
+		 * running any itself. With "never" it ran them, including qq's own
+		 * -r/-w/-x functions, which it cannot run: the model was told
+		 * "Error executing tool: 'write_file'" for a call qq went on to
+		 * carry out, and reasoned from that phantom failure. */
+		cJSON_AddStringToObject(t, "require_approval", "always");
 		cJSON_AddItemToArray(tools, t);
 		buf_free(&url);
 	}

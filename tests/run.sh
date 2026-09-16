@@ -57,7 +57,10 @@ cat >"$T/config.json" <<EOF
                 "mcp_servers": ["searxng_mcp", "ghost_mcp"] },
     "lt":     { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "reader" },
     "nokey":  { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "test-model",
-                "api_key_env": "QQ_MISSING_KEY" }
+                "api_key_env": "QQ_MISSING_KEY" },
+    "notools":{ "endpoint": "http://127.0.0.1:$PORT/v1", "model": "test-model", "tools": false },
+    "nomcp":  { "endpoint": "http://127.0.0.1:$PORT/v1", "model": "tooler", "mcp": false,
+                "mcp_servers": ["searxng_mcp"] }
   }
 }
 EOF
@@ -73,7 +76,7 @@ out_has "-h lists -l" "-l          list profile names"
 q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.3.0"
 
 q -l;                 expect_rc "-l" 0
-out_is "-l marks the default" $'* local\n  alt\n  down\n  tools\n  lt\n  nokey'
+out_is "-l marks the default" $'* local\n  alt\n  down\n  tools\n  lt\n  nokey\n  notools\n  nomcp'
 q -p alt -l;          expect_rc "-p -l" 0; out_has "-l marks -p" "* alt"
 out_lacks "-l marks only -p" "* local"
 q -l hi;              expect_rc "-l with a prompt" 0; out_has "-l with a prompt" "* local"
@@ -83,7 +86,7 @@ q -z hi;              expect_rc "bad flag" 2
 q -t abc hi;          expect_rc "-t abc" 2; err_has "-t abc" "invalid timeout"
 q -t 0 hi;            expect_rc "-t 0" 2
 q -p;                 expect_rc "-p without value" 2
-q -p nope hi;         expect_rc "unknown profile" 2; err_has "unknown profile" "available: local, alt, down, tools, lt, nokey"
+q -p nope hi;         expect_rc "unknown profile" 2; err_has "unknown profile" "available: local, alt, down, tools, lt, nokey, notools, nomcp"
 
 QQ_CONFIG="$T/missing.json" "$QQ" hi </dev/null 2>"$T/stderr"; rc=$?; err=$(<"$T/stderr"); out=
 expect_rc "missing config" 2; err_has "missing config" "config not found"
@@ -164,7 +167,7 @@ q -p tools find cats
 expect_rc "tool loop" 0
 out_is "tool loop answer" "answer from tool: results for cats"
 out=$(req 'd["body"]["tools"]')
-out_is "mcp tools offered" "[{'type': 'mcp', 'server_label': 'searxng_mcp', 'server_url': 'litellm_proxy/mcp/searxng_mcp', 'require_approval': 'never'}, {'type': 'mcp', 'server_label': 'ghost_mcp', 'server_url': 'litellm_proxy/mcp/ghost_mcp', 'require_approval': 'never'}]"
+out_is "mcp tools offered" "[{'type': 'mcp', 'server_label': 'searxng_mcp', 'server_url': 'litellm_proxy/mcp/searxng_mcp', 'require_approval': 'always'}, {'type': 'mcp', 'server_label': 'ghost_mcp', 'server_url': 'litellm_proxy/mcp/ghost_mcp', 'require_approval': 'always'}]"
 out=$(last /mcp-rest/tools/call '(d["path"], d["body"])')
 out_is "tool call request" "('/mcp-rest/tools/call', {'server_id': 'searxng_mcp', 'name': 'web_search', 'arguments': {'query': 'cats'}})"
 out=$(req '[m["role"] for m in d["body"]["messages"]]')
@@ -216,6 +219,15 @@ out=$(tools_offered);  out_is "-xw offers write+exec tools" "['write_file', 'edi
 
 qws -p lt -r -m searcher look
 out_is "search_files" "notes.txt:2: beta needle line"
+
+# An empty path means the same as none: the current directory, not a path of
+# its own that fails as "cannot list :".
+qws -p lt -r -m emptylister look
+out_is "empty path lists the current directory" $'notes.txt\nsub/'
+qws -p lt -r -m emptysearcher look
+out_is "empty path searches the current directory" "notes.txt:2: beta needle line"
+qws -p lt -r -m emptyreader look
+out_has "empty path has no file to read" 'missing "path" argument'
 
 qws -p lt -r -m outsider look
 out_has "outside read needs a terminal" "no terminal to ask the user"
@@ -381,6 +393,33 @@ out_is "unusable -L answers nothing" ""
 q -h
 out_has "-h documents -L" "-L file     append a timestamped log"
 out_has "usage shows -L" "[-L file]"
+
+# --- "tools" and "mcp" profile switches ------------------------------------
+
+# "tools": false refuses the flags outright rather than quietly ignoring them.
+q -p notools -r read something;   expect_rc '"tools": false with -r' 2
+err_has '"tools": false with -r' 'profile "notools" has "tools": false, so -r, -w and -x cannot be used with it'
+q -p notools -w write something;  expect_rc '"tools": false with -w' 2
+q -p notools -x run something;    expect_rc '"tools": false with -x' 2
+q -p notools -rwx do something;   expect_rc '"tools": false with -rwx' 2
+# Without a tool flag the profile is perfectly usable.
+q -p notools hello;               expect_rc '"tools": false without a flag' 0
+out_is '"tools": false without a flag' "hello from test-model"
+out=$(req 'd["body"].get("tools")');  out_is '"tools": false sends no tools' "None"
+
+# "mcp": false hides the servers the profile lists.
+q -p nomcp hello
+expect_rc '"mcp": false runs' 0
+out=$(req 'd["body"].get("tools")');  out_is '"mcp": false sends no mcp tools' "None"
+# ... and the same profile with the switch removed does offer them.
+out=$(q -p tools find cats; req 'd["body"]["tools"][0]["type"]')
+out_is "mcp offered without the switch" "mcp"
+
+# The two are independent: local tools still work when only mcp is off.
+qws -p nomcp -r -m reader look
+expect_rc '"mcp": false leaves -r alone' 0
+out_is '"mcp": false leaves -r alone' $'ALPHA line\nbeta needle line'
+out=$(tools_offered);  out_is '"mcp": false still offers local tools' "['read_file', 'list_directory', 'search_files']"
 
 # --- -d (set default) ------------------------------------------------------
 cp "$T/config.json" "$T/d.json"

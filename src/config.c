@@ -28,6 +28,22 @@ static int fail(char *err, size_t errlen, const char *fmt, ...)
 	return -1;
 }
 
+/* Optional switch; *out keeps its value unless the member is a JSON boolean.
+ * Only an explicit false turns something off, so a profile that says nothing
+ * behaves as it always has. */
+static int get_bool(const cJSON *obj, const char *key, int *out, const char *where,
+		    char *err, size_t errlen)
+{
+	const cJSON *it = cJSON_GetObjectItemCaseSensitive(obj, key);
+
+	if (!it || cJSON_IsNull(it))
+		return 0;
+	if (!cJSON_IsBool(it))
+		return fail(err, errlen, "%s\"%s\" must be true or false", where, key);
+	*out = cJSON_IsTrue(it);
+	return 0;
+}
+
 /* Optional string member; *out is NULL when absent, null or "". */
 static int get_str(const cJSON *obj, const char *key, const char **out,
 		   const char *where, char *err, size_t errlen)
@@ -150,13 +166,15 @@ int config_profile(const struct config *c, const char *name, struct profile *p,
 		return -1;
 	}
 
-	*p = (struct profile){ .name = obj->string, .temperature = NAN };
+	*p = (struct profile){ .name = obj->string, .temperature = NAN, .tools = 1, .mcp = 1 };
 	snprintf(where, sizeof where, "profile \"%s\": ", name);
 	if (get_str(obj, "backend", &backend, where, err, errlen) ||
 	    get_str(obj, "endpoint", &p->endpoint, where, err, errlen) ||
 	    get_str(obj, "model", &p->model, where, err, errlen) ||
 	    get_str(obj, "api_key_env", &p->api_key_env, where, err, errlen) ||
-	    get_str(obj, "system_prompt", &p->system_prompt, where, err, errlen))
+	    get_str(obj, "system_prompt", &p->system_prompt, where, err, errlen) ||
+	    get_bool(obj, "tools", &p->tools, where, err, errlen) ||
+	    get_bool(obj, "mcp", &p->mcp, where, err, errlen))
 		return -1;
 
 	/* "backend" is optional: OpenAI-compatible endpoints are the only kind. */
@@ -198,7 +216,7 @@ int config_profile(const struct config *c, const char *name, struct profile *p,
 			if (!cJSON_IsString(s) || !*s->valuestring)
 				return fail(err, errlen,
 					    "%s\"mcp_servers\" must be an array of server names", where);
-		if (cJSON_GetArraySize(it) > 0)
+		if (cJSON_GetArraySize(it) > 0 && p->mcp)
 			p->mcp_servers = it;
 	}
 	return 0;

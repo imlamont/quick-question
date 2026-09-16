@@ -293,10 +293,27 @@ durable option.
 | `temperature`, `max_tokens` | Passed through when set |
 | `system_prompt` | Steering for this profile |
 | `mcp_servers` | LiteLLM MCP server names to offer as tools (see below) |
+| `tools` | `false` forbids `-r`, `-w` and `-x` on this profile; anything else, including leaving it out, allows them |
+| `mcp` | `false` ignores this profile's `mcp_servers`; anything else, including leaving it out, offers them |
 | `backend` | Optional; `openai` is the only value accepted |
 
 The model must support OpenAI-style tool calling for `-r`, `-w`, `-x` and
 `mcp_servers` to work.
+
+`tools` and `mcp` are switches you have to set deliberately: both are on unless
+a profile says `false` outright. They are for a profile that should never touch
+your machine, or one whose MCP servers you want to silence without deleting the
+list:
+
+```json
+"readonly": { "endpoint": "http://localhost:4000", "model": "m", "tools": false },
+"nosearch": { "endpoint": "http://localhost:4000", "model": "m", "mcp": false,
+              "mcp_servers": ["searxng_mcp"] }
+```
+
+`-r`, `-w` or `-x` on a profile with `"tools": false` is refused with an error
+(exit 2) rather than quietly ignored, since you asked for the flag on purpose.
+The two are independent: a profile with `"mcp": false` can still use `-r`.
 
 ## How the prompt is steered
 
@@ -320,11 +337,17 @@ When a profile lists `mcp_servers`, each server is offered to the model like thi
 
 ```json
 {"type": "mcp", "server_label": "searxng_mcp",
- "server_url": "litellm_proxy/mcp/searxng_mcp", "require_approval": "never"}
+ "server_url": "litellm_proxy/mcp/searxng_mcp", "require_approval": "always"}
 ```
 
-LiteLLM runs the first round of tool calls itself, but it hands any further
-calls back to the client. `qq` handles those:
+`require_approval` is `always` so the gateway hands every tool call back to the
+client instead of running any itself. With `never` it ran them, and that
+included `qq`'s own `-r`/`-w`/`-x` functions, which it has no way to run: the
+model was told `Error executing tool: 'write_file'` for a call `qq` then carried
+out perfectly well, and reasoned from that phantom failure — retrying with
+different file content, or hunting for a file that was there all along.
+
+`qq` handles every MCP call itself:
 
 1. It runs each call through the proxy's `POST /mcp-rest/tools/call`. A call
    named `searxng_mcp-web_search` goes to server `searxng_mcp`, tool `web_search`.

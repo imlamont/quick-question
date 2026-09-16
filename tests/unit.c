@@ -182,7 +182,7 @@ static void test_mcp(void)
 	mcp_add_tools(req, one);
 	s = cJSON_PrintUnformatted(req);
 	STREQ(s, "{\"tools\":[{\"type\":\"mcp\",\"server_label\":\"db\","
-		 "\"server_url\":\"litellm_proxy/mcp/db\",\"require_approval\":\"never\"}]}");
+		 "\"server_url\":\"litellm_proxy/mcp/db\",\"require_approval\":\"always\"}]}");
 	cJSON_free(s);
 
 	cJSON_Delete(req);
@@ -413,6 +413,7 @@ static void test_config(void)
 	CHECK(p.max_tokens == 64);
 	CHECK(!p.system_prompt);
 	CHECK(cJSON_GetArraySize(p.mcp_servers) == 1);
+	CHECK(p.tools == 1 && p.mcp == 1); /* on unless a profile says otherwise */
 
 	/* "backend" is optional */
 	CHECK(config_profile(&c, "plain", &p, err, sizeof err) == 0);
@@ -460,6 +461,36 @@ static void test_config(void)
 	CHECK(!l.data);
 	buf_free(&l);
 	config_free(&c);
+
+	/* "tools" and "mcp" are off only when a profile says false outright. */
+	{
+		struct config s2 = {0};
+		struct profile q;
+		static const char switches[] =
+			"{\"profiles\":{"
+			"\"off\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":false,"
+			"\"mcp\":false,\"mcp_servers\":[\"searx\"]},"
+			"\"on\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":true,"
+			"\"mcp\":true,\"mcp_servers\":[\"searx\"]},"
+			"\"null\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":null}}}";
+
+		CHECK(config_parse(&s2, switches, strlen(switches), err, sizeof err) == 0);
+		CHECK(config_profile(&s2, "off", &q, err, sizeof err) == 0);
+		CHECK(q.tools == 0 && q.mcp == 0);
+		CHECK(!q.mcp_servers); /* "mcp": false hides the servers it lists */
+		CHECK(config_profile(&s2, "on", &q, err, sizeof err) == 0);
+		CHECK(q.tools == 1 && q.mcp == 1);
+		CHECK(cJSON_GetArraySize(q.mcp_servers) == 1);
+		CHECK(config_profile(&s2, "null", &q, err, sizeof err) == 0);
+		CHECK(q.tools == 1); /* null is "unset", like a missing member */
+		config_free(&s2);
+	}
+	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
+			  "\"model\":\"m\",\"tools\":\"yes\"}}}", "x", err, sizeof err) != 0);
+	CHECK(strstr(err, "profile \"x\": \"tools\" must be true or false"));
+	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
+			  "\"model\":\"m\",\"mcp\":1}}}", "x", err, sizeof err) != 0);
+	CHECK(strstr(err, "profile \"x\": \"mcp\" must be true or false"));
 
 	CHECK(try_profile("{\"profiles\":{}}", NULL, err, sizeof err) != 0);
 	CHECK(strstr(err, "no profile selected"));

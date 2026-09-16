@@ -169,6 +169,13 @@ int main(int argc, char **argv)
 	log_printf("profile %s model=%s endpoint=%s tools=%s%s%s", prof.name, prof.model,
 		   prof.endpoint, opt_tools & TOOLS_READ ? "r" : "",
 		   opt_tools & TOOLS_WRITE ? "w" : "", opt_tools & TOOLS_EXEC ? "x" : "");
+	/* Said plainly rather than ignored: the flag was asked for on purpose. */
+	if (opt_tools && !prof.tools) {
+		snprintf(err, sizeof err,
+			 "profile \"%s\" has \"tools\": false, so -r, -w and -x cannot be used with it",
+			 prof.name);
+		goto fail;
+	}
 
 	if (!isatty(STDIN_FILENO)) {
 		r = buf_read_fd(&input, STDIN_FILENO, QQ_STDIN_MAX);

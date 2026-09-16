@@ -243,13 +243,41 @@ An optional
 key may only be
 .BR openai .
 .PP
+Two switches turn capabilities off for a profile, and only an explicit
+.B false
+does so; both are on when the key is absent.
+.B "tools" : false
+makes
+.BR \-r ,
+.B \-w
+and
+.B \-x
+unusable with that profile, refused with an error (exit 2) rather than silently
+ignored, and
+.B "mcp" : false
+ignores the profile's
+.BR mcp_servers .
+They are independent: a profile with
+.B "mcp" : false
+can still use
+.BR \-r .
+.PP
 With
 .BR mcp_servers ,
-the named LiteLLM MCP servers are offered to the model as tools.
-The proxy runs the first round of tool calls itself;
+the named LiteLLM MCP servers are offered to the model as tools, with
+.B require_approval
+set to
+.BR always ,
+so the gateway returns every tool call instead of running any itself.
 .B qq
-runs any further calls through the proxy's
+runs each one through the proxy's
 .BR /mcp\-rest/tools/call .
+With
+.B never
+the gateway also tried to run
+.BR qq 's
+own local tools, which it cannot, and told the model they had failed when they
+had not.
 MCP and local tool calls together are limited to 20 rounds.
 .SH FILES
 .TP

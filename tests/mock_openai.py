@@ -39,6 +39,10 @@ LOCAL = {
     "editor": [local("edit_file", path="notes.txt", old_text="alpha", new_text="ALPHA")],
     "editor2": [local("edit_file", path="notes.txt", old_text="line", new_text="LINE")],
     "runner": [local("run_command", command="echo from-shell; echo oops >&2; exit 3")],
+    # Models send an empty path where they mean the current directory.
+    "emptylister": [local("list_directory", path="")],
+    "emptysearcher": [local("search_files", pattern="needle", path="")],
+    "emptyreader": [local("read_file", path="")],
 }
 
 

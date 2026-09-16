@@ -637,7 +637,11 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 		goto done;
 	}
 
+	/* An empty string is no path: models send one, and it used to reach the
+	 * tool as a path of its own, failing as "cannot list :". */
 	path = arg_str(args, "path");
+	if (path && !*path)
+		path = NULL;
 	if (!path && (!strcmp(name, "list_directory") || !strcmp(name, "search_files")))
 		path = ".";
 	if (!path) {
