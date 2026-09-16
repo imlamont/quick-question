@@ -334,8 +334,10 @@ static void test_config(void)
 {
 	struct config c = {0};
 	struct profile p;
+	struct buf l = {0};
 	char err[512];
 
+	setenv("KEY", "sk-unit", 1);
 	CHECK(config_parse(&c, sample, strlen(sample), err, sizeof err) == 0);
 	STREQ(c.default_profile, "local");
 	STREQ(c.system_prompt, "global");
@@ -363,6 +365,39 @@ static void test_config(void)
 
 	CHECK(config_profile(&c, "nope", &p, err, sizeof err) != 0);
 	CHECK(strstr(err, "unknown profile \"nope\" (available: local, plain)"));
+
+	/* "api_key_env" holding the key itself, rather than a variable name, used
+	 * to send no Authorization header at all. */
+	unsetenv("KEY");
+	CHECK(config_profile(&c, "local", &p, err, sizeof err) != 0);
+	CHECK(strstr(err, "profile \"local\": \"api_key_env\" names environment variable KEY, "
+			  "which is not set"));
+	setenv("KEY", "", 1);
+	CHECK(config_profile(&c, "local", &p, err, sizeof err) != 0);
+	CHECK(strstr(err, "environment variable KEY, which is empty"));
+	setenv("KEY", "sk-unit", 1);
+	CHECK(config_profile(&c, "local", &p, err, sizeof err) == 0);
+
+	/* A profile with no "api_key_env" needs no variable. */
+	CHECK(config_profile(&c, "plain", &p, err, sizeof err) == 0);
+
+	/* -l: config order, "* " on the profile that would be used. */
+	config_list(&c, NULL, &l);
+	STREQ(l.data, "* local\n  plain\n");
+	buf_free(&l);
+	config_list(&c, "plain", &l);
+	STREQ(l.data, "  local\n* plain\n");
+	buf_free(&l);
+	config_list(&c, "gone", &l); /* nothing to mark */
+	STREQ(l.data, "  local\n  plain\n");
+	buf_free(&l);
+	config_free(&c);
+
+	/* An empty "profiles" object lists nothing at all. */
+	CHECK(config_parse(&c, "{\"profiles\":{}}", 15, err, sizeof err) == 0);
+	config_list(&c, NULL, &l);
+	CHECK(!l.data);
+	buf_free(&l);
 	config_free(&c);
 
 	CHECK(try_profile("{\"profiles\":{}}", NULL, err, sizeof err) != 0);
