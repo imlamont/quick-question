@@ -1,3 +1,15 @@
+quick-question (0.2.0-1) resolute; urgency=medium
+
+  * New upstream release:
+    - local tools behind -r (read), -w (write and edit) and -x (run
+      commands), each change confirmed on the terminal
+    - approval prompts are refused after 120 seconds, so an unattended
+      run cannot wait forever
+    - example profile for a local Ollama server
+    - OpenAI-compatible endpoints are the only supported kind
+
+ -- Ian Lamont <imlamont@comcast.net>  Tue, 15 Sep 2026 23:40:00 +0000
+
 quick-question (0.1.0-1) resolute; urgency=medium
 
   * Initial release.

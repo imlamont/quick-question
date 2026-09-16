@@ -1,8 +1,8 @@
 # CLAUDE.md: Debian packaging
 
-This is guidance for Claude Code on the `debian` branch. The upstream guidance
-(code, tests, conventions) is in `../docs/CLAUDE.md`; this file covers only
-packaging. Human-readable build and update instructions are in
+This is guidance for AI coding assistants on the `debian` branch. The upstream
+guidance (code, tests, conventions) is in `../docs/CLAUDE.md`; this file covers
+only packaging. Human-readable build and update instructions are in
 `README.source`.
 
 ## Branch model
@@ -27,7 +27,6 @@ packaging. Human-readable build and update instructions are in
 | `copyright` | DEP-5, Expat (MIT), 2026 Ian Lamont |
 | `source/format`, `source/options` | `3.0 (quilt)`; `extend-diff-ignore` for `.github/` |
 | `docs`, `examples` | install `README.md` and `config.example.json` |
-| `quick-question.lintian-overrides` | `initial-upload-closes-no-bugs`: not uploaded to the Debian archive, so there's no ITP bug. Add overrides only with a comment giving the reason. |
 | `README.source` | branch model, updating, building, CI |
 | `.gitignore` | debhelper build output |
 
@@ -53,7 +52,6 @@ A packaging change is done only when all of these hold:
   - `/usr/share/man/man1/qq.1.gz`
   - `/usr/share/doc/quick-question/` with `README.md.gz`,
     `changelog.Debian.gz`, `copyright` and `examples/config.example.json`
-  - `/usr/share/lintian/overrides/quick-question`
 
 For a source package, also build once with the orig tarball (see
 `README.source`). `dpkg-source` must accept the tree without patches.

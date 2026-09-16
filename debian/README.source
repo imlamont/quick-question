@@ -18,11 +18,11 @@ Updating to a new upstream version
     git checkout debian
     git merge main
     # add a debian/changelog entry for <upstream-version>-1, e.g. with
-    dch -v 0.2.0-1 "New upstream release."
+    dch -v 0.3.0-1 "New upstream release."
 
 The upstream part of the version must match QQ_VERSION in src/qq.h; the
 GitHub workflow checks this. For a packaging-only change, bump the Debian
-revision instead (0.1.0-2).
+revision instead (0.2.0-2).
 
 The changelog distribution is an Ubuntu series (currently "resolute"),
 because lintian on Ubuntu rejects Debian's "unstable".
@@ -35,8 +35,8 @@ Binary packages only (this is what the GitHub workflow does):
 
     sudo apt install debhelper lintian libcurl4-openssl-dev libcjson-dev python3
     dpkg-buildpackage -us -uc -b
-    lintian ../quick-question_0.1.0-1_amd64.deb
-    sudo apt install ../quick-question_0.1.0-1_amd64.deb
+    lintian ../quick-question_0.2.0-1_amd64.deb
+    sudo apt install ../quick-question_0.2.0-1_amd64.deb
 
 The build runs the upstream test suite. Set DEB_BUILD_OPTIONS=nocheck to
 skip it. The package installs /usr/bin/qq, the qq(1) man page, README.md, and
@@ -45,8 +45,8 @@ config.example.json under /usr/share/doc/quick-question/examples/.
 A source package also needs the orig tarball. Create it from the upstream
 commit this branch last merged:
 
-    git archive --format=tar.gz --prefix=quick-question-0.1.0/ \
-        -o ../quick-question_0.1.0.orig.tar.gz "$(git merge-base HEAD main)"
+    git archive --format=tar.gz --prefix=quick-question-0.2.0/ \
+        -o ../quick-question_0.2.0.orig.tar.gz "$(git merge-base HEAD main)"
     dpkg-buildpackage -us -uc
 
 
