@@ -7,6 +7,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
+#include <limits.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -214,34 +216,53 @@ static void note(const char *name, const char *arg)
 	buf_free(&b);
 }
 
-/* Ask on the terminal. Returns 1 for yes, 0 for no, or -1 when there is no
- * terminal to ask. The time spent waiting is added to *waited_ms. */
+/* Waiting at a prompt doesn't count against -t, so without a limit an
+ * unattended run would wait for an answer forever. */
+#define APPROVAL_TIMEOUT_MS (120 * 1000)
+
+int tools_read_answer(int fd, long long timeout_ms)
+{
+	struct pollfd pfd = { .fd = fd, .events = POLLIN };
+	char answer[64], *a;
+	ssize_t n;
+	int r;
+
+	while ((r = poll(&pfd, 1, timeout_ms > INT_MAX ? INT_MAX : (int)timeout_ms)) < 0)
+		if (errno != EINTR)
+			return TOOLS_ANSWER_NO;
+	if (r == 0)
+		return TOOLS_ANSWER_TIMEOUT;
+
+	while ((n = read(fd, answer, sizeof answer - 1)) < 0 && errno == EINTR)
+		;
+	if (n <= 0) /* end of input counts as no */
+		return TOOLS_ANSWER_NO;
+	answer[n] = '\0';
+	if ((a = strchr(answer, '\n')))
+		*a = '\0';
+	a = str_trim(answer);
+	for (char *p = a; *p; p++)
+		*p = (char)tolower((unsigned char)*p);
+	return !strcmp(a, "y") || !strcmp(a, "yes") ? TOOLS_ANSWER_YES : TOOLS_ANSWER_NO;
+}
+
+/* Ask on the terminal. Returns TOOLS_ANSWER_*, or -1 when there is no terminal
+ * to ask. The time spent waiting is added to *waited_ms. */
 static int confirm(const char *question, long long *waited_ms)
 {
 	long long start = proc_now_ms();
-	FILE *tty = fopen("/dev/tty", "r+");
-	char answer[16];
-	int yes = 0;
+	int fd = open("/dev/tty", O_RDWR | O_CLOEXEC), r;
 
-	if (!tty)
+	if (fd < 0)
 		return -1;
-	fprintf(tty, "\n%s\nAllow? [y/N] ", question);
-	fflush(tty);
-	if (fgets(answer, sizeof answer, tty)) {
-		char *a;
-		int c;
-
-		if (!strchr(answer, '\n')) /* discard the rest of a long line */
-			while ((c = fgetc(tty)) != EOF && c != '\n')
-				;
-		a = str_trim(answer);
-		for (char *p = a; *p; p++)
-			*p = (char)tolower((unsigned char)*p);
-		yes = !strcmp(a, "y") || !strcmp(a, "yes");
-	}
-	fclose(tty);
+	dprintf(fd, "\n%s\nAllow? [y/N] ", question);
+	r = tools_read_answer(fd, APPROVAL_TIMEOUT_MS);
+	if (r == TOOLS_ANSWER_TIMEOUT)
+		dprintf(fd, "\nqq: no answer after %d seconds, so this was not done\n",
+			APPROVAL_TIMEOUT_MS / 1000);
+	close(fd);
 	*waited_ms += proc_now_ms() - start;
-	return yes;
+	return r;
 }
 
 /* Ask the question in q (then freed). On refusal, explain why in out. */
@@ -250,10 +271,15 @@ static int allowed(struct buf *q, long long *waited_ms, struct buf *out)
 	int r = confirm(q->data, waited_ms);
 
 	buf_free(q);
-	if (r == 1)
+	if (r == TOOLS_ANSWER_YES)
 		return 1;
-	buf_puts(out, r < 0 ? "error: not done: there is no terminal to ask the user for approval"
-			    : "error: the user denied this; don't retry it");
+	if (r == TOOLS_ANSWER_TIMEOUT)
+		buf_appendf(out, "error: not done: the user did not answer within %d seconds",
+			    APPROVAL_TIMEOUT_MS / 1000);
+	else if (r < 0)
+		buf_puts(out, "error: not done: there is no terminal to ask the user for approval");
+	else
+		buf_puts(out, "error: the user denied this; don't retry it");
 	return 0;
 }
 

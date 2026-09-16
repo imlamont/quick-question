@@ -27,6 +27,12 @@ void tools_describe(struct buf *out, int enabled);
 /* The TOOLS_* flag that enables tool name, or 0 if it isn't a local tool. */
 int tools_flag(const char *name);
 
+enum { TOOLS_ANSWER_NO = 0, TOOLS_ANSWER_YES = 1, TOOLS_ANSWER_TIMEOUT = -2 };
+
+/* Read one y/N answer from fd, waiting at most timeout_ms. End of input counts
+ * as no, so an unattended prompt can't wait forever. */
+int tools_read_answer(int fd, long long timeout_ms);
+
 /* Run one assistant tool_call for a local tool. Time spent waiting for the
  * user's approval is added to *waited_ms; commands are killed at deadline_ms
  * plus that time. Always returns malloc'd text for the tool message, starting

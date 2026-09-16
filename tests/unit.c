@@ -258,6 +258,31 @@ static void test_tools(void)
 	cJSON_Delete(req);
 	cJSON_Delete(servers);
 
+	/* tools_read_answer: y/yes approve, anything else (or silence) doesn't */
+	{
+		const struct { const char *typed; int want; } answers[] = {
+			{ "y\n", TOOLS_ANSWER_YES },   { "yes\n", TOOLS_ANSWER_YES },
+			{ " Y \n", TOOLS_ANSWER_YES }, { "YES\n", TOOLS_ANSWER_YES },
+			{ "n\n", TOOLS_ANSWER_NO },    { "\n", TOOLS_ANSWER_NO },
+			{ "later\n", TOOLS_ANSWER_NO },
+		};
+		int p[2];
+
+		for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
+			CHECK(pipe(p) == 0);
+			CHECK(write(p[1], answers[i].typed, strlen(answers[i].typed)) > 0);
+			CHECK(tools_read_answer(p[0], 1000) == answers[i].want);
+			close(p[0]);
+			close(p[1]);
+		}
+
+		CHECK(pipe(p) == 0); /* nothing typed: times out, which is not approval */
+		CHECK(tools_read_answer(p[0], 50) == TOOLS_ANSWER_TIMEOUT);
+		close(p[1]); /* end of input: also not approval */
+		CHECK(tools_read_answer(p[0], 1000) == TOOLS_ANSWER_NO);
+		close(p[0]);
+	}
+
 	/* tools_inside_cwd, from inside a scratch directory */
 	here = open(".", O_RDONLY);
 	CHECK(here >= 0 && mkdtemp(dir) && chdir(dir) == 0);
