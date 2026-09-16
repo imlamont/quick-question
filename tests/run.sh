@@ -70,7 +70,7 @@ q -h;                 expect_rc "-h" 0; out_has "-h" "usage: qq"; out_has "-h" "
 out_has "-h tools" "-r, -w and -x combine"
 out_has "-h usage flags" "qq [-hclrvwx]"
 out_has "-h lists -l" "-l          list profile names"
-q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.2.0"
+q -v;                 expect_rc "-v" 0; out_is "-v" "qq 0.3.0"
 
 q -l;                 expect_rc "-l" 0
 out_is "-l marks the default" $'* local\n  alt\n  down\n  tools\n  lt\n  nokey'
