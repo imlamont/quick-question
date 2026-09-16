@@ -135,7 +135,8 @@ qq -x how much space is left on this disk
   Allow? [y/N]
   ```
 - Only `y` or `yes` approves. With no terminal to ask, as in a script or cron
-  job, the action is refused.
+  job, the action is refused. An unanswered prompt is refused after 120
+  seconds, so a run you walk away from ends instead of waiting forever.
 - A refusal goes back to the model as the tool's result, telling it not to
   retry.
 - Each tool that runs is logged on stderr, for example `qq: read_file Makefile`.
@@ -165,17 +166,14 @@ cp config.example.json ~/.config/qq/config.json
 
 ```json
 {
-  "default": "local",
+  "default": "ollama",
   "system_prompt": "Answer concisely in plain text.",
   "timeout": 120,
   "profiles": {
-    "local": {
-      "backend": "openai",
+    "ollama": {
       "endpoint": "http://localhost:11434/v1",
-      "model": "qwen3:8b",
-      "api_key_env": "OPENAI_API_KEY",
-      "temperature": 0.2,
-      "max_tokens": 1024
+      "model": "hermes3",
+      "temperature": 0.2
     },
     "litellm": {
       "backend": "openai",
@@ -187,6 +185,24 @@ cp config.example.json ~/.config/qq/config.json
   }
 }
 ```
+
+### Ollama
+
+Ollama's OpenAI-compatible API needs no key, so leave `api_key_env` out. Pull
+the model first (`ollama pull hermes3`), or set `model` to something from
+`ollama list`; otherwise the first call returns `HTTP 404: model ... not
+found`. Give large models a longer `timeout`, since the first call loads the
+model. Tools (`-r`, `-w`, `-x`) need a model that supports tool calling;
+hermes3 does.
+
+Running `qq` in WSL with Ollama on Windows is a special case, because WSL's
+default NAT networking means `localhost` doesn't reach the Windows host.
+Either switch WSL to mirrored networking, by putting `networkingMode=mirrored`
+under `[wsl2]` in `%UserProfile%\.wslconfig` and running `wsl --shutdown`, or
+point `endpoint` at the host's gateway address
+(`ip route show default | awk '{print $3}'`, typically `172.x.x.1`). That
+address can change when Windows reboots, so mirrored networking is the more
+durable option.
 
 ### Top level
 

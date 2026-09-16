@@ -135,7 +135,8 @@ which shows exactly what will happen; only
 or
 .B yes
 approves.
-Without a terminal the action is refused.
+Without a terminal the action is refused, as is a prompt left unanswered for
+120 seconds.
 Refusals are reported to the model as the tool's result.
 Each tool that runs is logged on standard error.
 .SH CONFIGURATION

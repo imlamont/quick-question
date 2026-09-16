@@ -1,15 +1,12 @@
 {
-  "default": "local",
+  "default": "ollama",
   "system_prompt": "Answer concisely in plain text.",
   "timeout": 120,
   "profiles": {
-    "local": {
-      "backend": "openai",
+    "ollama": {
       "endpoint": "http://localhost:11434/v1",
-      "model": "qwen3:8b",
-      "api_key_env": "OPENAI_API_KEY",
-      "temperature": 0.2,
-      "max_tokens": 1024
+      "model": "hermes3",
+      "temperature": 0.2
     },
     "litellm": {
       "backend": "openai",

@@ -112,7 +112,9 @@ Report actual test output. Don't claim a result you didn't run.
     - Reads inside the working directory are automatic.
     - Reads outside it (checked with `realpath`, so symlinks count), and every
       write, edit and command, need `y`/`yes` on `/dev/tty`.
-    - With no terminal the action is refused.
+    - With no terminal the action is refused, and so is a prompt left
+      unanswered for `APPROVAL_TIMEOUT_MS` (120 s). Waiting doesn't count
+      against `-t`, so without that limit an unattended run would hang.
     - `edit_file` checks that `old_text` occurs exactly once *before* asking.
   - **Never add a way to approve without a terminal**, such as an environment
     variable, a config key or a "yes to all" flag, unless the owner explicitly
