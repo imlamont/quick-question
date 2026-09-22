@@ -29,7 +29,7 @@ int tools_flag(const char *name);
 
 /* Answer every approval prompt with yes, showing it on stderr instead of
  * asking. This is what -y does, and qq.c calls it only after checking that the
- * profile has "allow_danger": true. Nothing else may call it: it is the one
+ * gateway has "allow_danger": true. Nothing else may call it: it is the one
  * route by which a write, an edit or a command happens unapproved, and it works
  * with no terminal at all, so a run in a script or a cron job is no longer
  * stopped by the absence of one. */

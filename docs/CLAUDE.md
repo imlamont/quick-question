@@ -29,8 +29,9 @@ Report actual test output. Don't claim a result you didn't run.
   libcurl. **Don't add a backend that shells out to a vendor's command-line
   assistant.** Such tools must not be used as a backend; their terms don't
   permit this use.
-- A profile's `backend` key is optional and only `openai` is accepted. Anything
-  else is a config error (exit 2).
+- There is no `backend` config key any more; OpenAI-compatible is the only
+  kind, so nothing selects it. Do not resurrect a `backend` key without being
+  asked.
 
 ## Installing, branches and versioning
 
@@ -52,8 +53,8 @@ Report actual test output. Don't claim a result you didn't run.
 
 | File | Responsibility |
 |---|---|
-| `src/qq.c` | getopt (`"+hlvcrwxyd:p:m:s:t:L:"`), orchestration, output, exit codes |
-| `src/config.c` | config path lookup, cJSON parse and validation, the `tools`/`mcp` profile switches, `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode) |
+| `src/qq.c` | getopt (`"+hlvcrwxyd:p:s:t:L:"`), orchestration, output, exit codes |
+| `src/config.c` | config path lookup, cJSON parse and validation of gateways and their models, the tools/mcp_servers/allow_danger narrowing rules, `config_profile` (selection), `config_list` (`-l`), `config_set_default` (mkstemp, fsync, rename; follows symlinks, keeps file mode; saves the qualified `gateway/model`) |
 | `src/prompt.c` | system-prompt layering, `-c` environment line, `<stdin>` wrapping, reply cleanup (`<think>` block, trimming) |
 | `src/openai.c` | builds the chat request and runs the tool loop (at most `QQ_MAX_TOOL_ROUNDS`). Local tool calls go to `tools_call`, others to `mcp_call`. Time spent at approval prompts extends the deadline. Keeps a `struct history` of local calls already answered, so repeats are replayed instead of redone. |
 | `src/http.c` | one reused libcurl handle, JSON POST, one deadline for the whole call, error-message extraction |
@@ -65,7 +66,7 @@ Report actual test output. Don't claim a result you didn't run.
 | `src/qq.h` | version, limits, default timeout, round cap |
 | `tests/unit.c` | CHECK/STREQ unit tests for buf, prompt, config, URLs, MCP, tool and log helpers |
 | `tests/run.sh` | integration tests against the real binary |
-| `tests/mock_openai.py` | chat and MCP mock; `model` picks the behavior: `empty`, `unauthorized`, `garbage`, `thinker`, `slow`, `tooler`, `twotools`, `looper`, `writeloop`, `readloop`, `mixloop`, `rereader`, the local-tool callers in `LOCAL`, anything else replies `hello from <model>`. Every request is appended to a JSON-lines log. |
+| `tests/mock_openai.py` | chat and MCP mock; `model` (the id qq sends, not a config key) picks the behavior: `empty`, `unauthorized`, `garbage`, `thinker`, `slow`, `tooler`, `twotools`, `looper`, `writeloop`, `readloop`, `mixloop`, `rereader`, the local-tool callers in `LOCAL`, anything else replies `hello from <model>`. Every request is appended to a JSON-lines log. |
 
 - **Debug log** (`src/log.c`, `-L`):
   - `log_open` appends, and every other entry point does nothing until it has
@@ -107,7 +108,10 @@ Report actual test output. Don't claim a result you didn't run.
   update `tests/run.sh` or `tests/unit.c` too.
 - `struct profile` and `struct config` strings point **into the cJSON tree**
   (or into argv for overrides). Nothing is copied, so the tree must outlive
-  every use. Optional strings are `NULL` when absent or `""`.
+  every use. Optional strings are `NULL` when absent or `""`. `struct profile`
+  is now the result of resolving one model on one gateway with everything it
+  inherits already applied -- there is no other struct for "the config entry
+  as written"; `parse_gateway`/`parse_model` in `config.c` do the resolving.
 - `buf` functions never return an allocation failure; they print and exit.
   `buf.data` is always NUL-terminated once it's non-NULL.
 - Keep the binary small and startup fast.
@@ -120,10 +124,39 @@ Report actual test output. Don't claim a result you didn't run.
 - **stdin**: read whenever it isn't a TTY, capped at 1 MiB. A non-TTY stdin
   that never closes blocks `qq`. `-d NAME` with no prompt deliberately skips
   reading stdin.
-- **Timeout** (`-t` or config `timeout`) is one deadline for the whole call:
-  every chat request, every tool call, and `run_command`.
+- **Timeout** (`-t`, else the model's, else its gateway's, else the top-level
+  `timeout`) is one deadline for the whole call: every chat request, every
+  tool call, and `run_command`.
+- **Gateways and models** (`config.c`): the config's `gateways` object holds
+  named gateways, each with a `models` object of its own. `struct gateway` in
+  `config.c` is the checked, in-memory form of one gateway (endpoint, key,
+  tuning defaults, and what it grants); it is not part of the public header,
+  only `struct profile` is, since only a fully-resolved model is ever handed
+  to the rest of the program.
+  - A gateway grants **nothing** it doesn't list: `tools` (an array of
+    `"read"`, `"write"`, `"exec"`) and `mcp_servers` both default to none, and
+    `allow_danger` defaults to false. This is the opposite of the old
+    `profiles` format, where omitting `tools`/`mcp` meant "on".
+  - A model may **narrow** what its gateway grants -- a subset of `tools`, a
+    subset of `mcp_servers`, `allow_danger: false` to opt out -- but never
+    widen it. Listing something the gateway doesn't grant is a config error
+    (exit 2) caught by `parse_model`, not something silently dropped or
+    silently ignored.
+  - Validation is eager for structure: every gateway and every model is
+    checked at load (`validate()` in `config.c`), so a mistake in a gateway
+    that isn't selected is still reported. Only the *selected* model's
+    `api_key_env` has to actually be set; other gateways' keys don't need to
+    exist in the environment.
+  - Selection (`-p`, `-d`, and the config's `default`) takes
+    `[gateway/]model`. `select_model()` tries a qualified name first (splitting
+    on the first `/` only when what precedes it is a real gateway name, so a
+    model id like `meta/llama-3` still works bare), then a bare model name
+    (unique across gateways, or it's an error naming the candidates) or a bare
+    gateway name (its `default_model`, or the first model listed).
 - **LiteLLM MCP loop**:
-  - A profile's `mcp_servers` are sent as `{"type":"mcp","server_label":S,"server_url":"litellm_proxy/mcp/S","require_approval":"always"}`.
+  - A model's effective `mcp_servers` (its own list if it set one, else its
+    gateway's) are sent as
+    `{"type":"mcp","server_label":S,"server_url":"litellm_proxy/mcp/S","require_approval":"always"}`.
   - **`require_approval` must stay `always`.** With `never` the gateway executes
     tool calls itself, and it does not stop at MCP tools: it also tried to run
     `write_file`, `read_file` and `run_command`, failed, and fed the model
@@ -138,19 +171,16 @@ Report actual test output. Don't claim a result you didn't run.
   - It appends the assistant turn with `tool_calls` and one `role: "tool"` message per call, then asks again.
   - Tool failures go back to the model as `error: ...` rather than aborting.
   - `arguments` arrives as a JSON string; `""` means `{}`.
-- **Profile switches** (`config.c`): `tools`, `mcp` and `allow_danger` are read with `get_bool`,
-  which leaves the value alone unless the member is a real JSON boolean, so
-  absent and `null` both mean "on". Defaults are set in the `struct profile`
-  initializer, not in the parser. `"mcp": false` simply leaves `mcp_servers`
-  NULL, which the rest of the code already handles; `"tools": false` is checked
-  in `qq.c`, which **errors** (exit 2) when a tool flag was given rather than
-  ignoring it, because the flag was typed on purpose. Keep that asymmetry: a
-  silenced MCP list is a setting, a silenced `-x` is a surprise.
 
 - **Local tools** (`src/tools.c`):
   - The flags are `-r` (`read_file`, `list_directory`, `search_files`), `-w`
     (`write_file`, `edit_file`) and `-x` (`run_command`). They OR into a
     `TOOLS_*` mask and imply `-c`.
+  - `qq.c` refuses a flag whose category isn't in the resolved model's
+    effective `tools` (exit 2, before anything is sent), because the flag was
+    typed on purpose. Keep that asymmetry with MCP: a model with no
+    `mcp_servers` just gets none offered, but an explicit `-r`/`-w`/`-x` the
+    model isn't allowed is a surprise worth erroring on.
   - Approval:
     - Reads inside the working directory are automatic.
     - Reads outside it (checked with `realpath`, so symlinks count), and every
@@ -183,10 +213,12 @@ Report actual test output. Don't claim a result you didn't run.
   - `-y` (`tools_skip_approval`) makes `confirm()` return yes without opening
     `/dev/tty`, which is also what lets a `-y` run work with no terminal at all.
     Two things guard it and both must stay: `qq.c` refuses the flag unless the
-    profile has `"allow_danger": true` (exit 2, before anything is sent), and
-    the question is still printed to stderr so the run records what was done.
-    `allow_danger` defaults to **off** while `tools` and `mcp` default to on --
-    a capability you give away is opt-in, one you already had is opt-out.
+    resolved model's effective `allow_danger` is true (exit 2, before anything
+    is sent -- a gateway grants it, and a model may only turn it back off, never
+    on for itself), and the question is still printed to stderr so the run
+    records what was done. `allow_danger`, `tools` and `mcp_servers` all default
+    to **off/none** at the gateway; a model can only take them away, never add
+    them.
   - Anything model-controlled that is shown on the terminal or stderr goes
     through `append_preview`, which turns control characters into `?`. Keep it
     that way; it stops escape-sequence injection.
@@ -198,7 +230,7 @@ Report actual test output. Don't claim a result you didn't run.
       skipped
     - `run_command`: 32 KB per stream
 - **API keys** are never stored in config. `api_key_env` names an environment
-  variable. Don't add keys to example files, tests or docs.
+  variable, set on a gateway. Don't add keys to example files, tests or docs.
 
 ## Adding tests
 
@@ -208,7 +240,9 @@ Report actual test output. Don't claim a result you didn't run.
   `out_has`, `err_has` or `true_that`. To check what the mock received, use
   `req 'EXPR'` (last chat request), `system` / `prompt` (its system and user
   messages) or `last /mcp-rest/tools/call 'EXPR'`, where `d` is the logged
-  request. New mock behavior means a new model name in `tests/mock_openai.py`.
+  request. New mock behavior means a new model id in `tests/mock_openai.py`,
+  and a config entry under some gateway's `models` giving that id (as `id`,
+  or as the model's key when they're the same string) so a test can select it.
 - Local tools: run inside the scratch workspace `$W` with one of:
   - `qws ARGS`: detached with `setsid`, so no approval is possible.
   - `qtty 'y\n' ARGS`: on a pseudo-terminal via `script` that types the

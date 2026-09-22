@@ -39,7 +39,7 @@ install on Ubuntu 24.04 or newer and comparable Debian releases. `apt`
 installs the libcurl and cJSON libraries they need.
 
 ```sh
-sudo apt install ./quick-question_0.3.0-1_amd64.deb
+sudo apt install ./quick-question_0.4.0-1_amd64.deb
 qq -v
 ```
 
@@ -76,22 +76,21 @@ sudo make install    # installs bin/qq and share/man/man1/qq.1 under /usr/local
 ## Usage
 
 ```
-qq [-hclrvwxy] [-d profile] [-p profile] [-m model] [-s text] [-t secs]
-   [-L file] [--] prompt...
+qq [-hclrvwxy] [-d model] [-p model] [-s text] [-t secs] [-L file]
+   [--] prompt...
 ```
 
 | Option | Meaning |
 |---|---|
 | `-h` | Show help |
 | `-v` | Show version |
-| `-l` | List profile names, marking with `*` the one that would be used |
+| `-l` | List every model with what it may do, marking with `*` the one that would be used |
 | `-c` | Add shell context (OS, shell, working directory) to the prompt |
 | `-r` | Let the model read files (see [Local tools](#local-tools--r--w--x)) |
 | `-w` | Let the model create and edit files |
 | `-x` | Let the model run shell commands |
-| `-p profile` | Use this profile for this call |
-| `-d profile` | Save the profile as the default in the config, then run the prompt if one is given |
-| `-m model` | Override the profile's model |
+| `-p model` | Use this model for this call: `gateway/model`, or just `model` when only one gateway has it. A gateway name alone means that gateway's default model (see [Choosing a model](#choosing-a-model)) |
+| `-d model` | Save the model as the default in the config (as `gateway/model`), then run the prompt if one is given |
 | `-s text` | Add extra steering text to the system prompt |
 | `-t secs` | Timeout for the whole call, tool rounds included (default: config `timeout`, else 120) |
 | `-L file` | Append a timestamped log of the whole exchange to `file` (see [Debug log](#debug-log--l)) |
@@ -105,20 +104,22 @@ terminal is needed, so `qq` will do them in a script or a cron job where it
 would otherwise refuse for want of one.
 
 Because that removes the only thing standing between a model and your files,
-the flag is not enough on its own. The profile has to have opted in:
+the flag is not enough on its own. The gateway has to have opted in:
 
 ```json
 "agent": {
   "endpoint": "http://localhost:4000",
-  "model": "nemotron-3.5-lightning",
   "api_key_env": "LITELLM_API_KEY",
-  "allow_danger": true
+  "tools": ["read", "write", "exec"],
+  "allow_danger": true,
+  "models": { "nemotron": { "id": "nemotron-3.5-lightning" } }
 }
 ```
 
-`allow_danger` is off unless a profile says `true`, and `-y` on any other
-profile is an error (exit 2) that does nothing. Keep it on a profile you made
-for the purpose, not on the one you use day to day.
+`allow_danger` is off unless a gateway says `true`, and `-y` on any other
+gateway's models is an error (exit 2) that does nothing. A model can turn it
+back off with `"allow_danger": false`, but can never turn it on for itself.
+Keep it on a gateway you made for the purpose, not the one you use day to day.
 
 Each action is still printed on stderr before it happens, so the run leaves a
 record of what was done on your behalf:
@@ -144,7 +145,7 @@ $ qq -w -L /tmp/qq.log write the current weather to test.txt
 $ cut -c1-90 /tmp/qq.log
 2026-09-16T00:04:22.911-0400 command qq -w -L /tmp/qq.log 'write the current weather to test.txt'
 2026-09-16T00:04:22.911-0400 start qq 0.3.0 pid=14987
-2026-09-16T00:04:22.911-0400 profile ol model=hermes3:latest endpoint=http://localhost:11434/v1 tools=w
+2026-09-16T00:04:22.911-0400 model ollama/hermes3 id=hermes3:latest endpoint=http://localhost:11434/v1 tools=w allowed=rwx mcp=0
 2026-09-16T00:04:22.911-0400 timeout 300s
 2026-09-16T00:04:22.914-0400 request http://localhost:11434/v1/chat/completions {"model":"herm
 2026-09-16T00:04:29.980-0400 response 200 7066ms {"id":"chatcmpl-177","object":"chat.completio
@@ -165,7 +166,7 @@ then the event:
 | --- | --- |
 | `command` | the whole command line as invoked, quoted the way a shell would need it |
 | `start` | version and process id |
-| `profile` | profile name, model, endpoint and the tool flags in force |
+| `model` | `gateway/model`, the id sent to the API, the endpoint, the tool flags in force, the tools the model is allowed (`allowed=`) and how many MCP servers it has |
 | `timeout` | the limit the whole call has to finish in |
 | `request` | the URL and the **entire** request body, chat and MCP alike |
 | `response` | status, how long it took, and the whole body |
@@ -275,32 +276,49 @@ cp config.example.json ~/.config/qq/config.json
 
 ```json
 {
-  "default": "ollama",
+  "default": "ollama/hermes3",
   "system_prompt": "Answer concisely in plain text.",
   "timeout": 120,
-  "profiles": {
+  "gateways": {
     "ollama": {
       "endpoint": "http://localhost:11434/v1",
-      "model": "hermes3",
-      "temperature": 0.2
+      "models": {
+        "hermes3": { "id": "hermes3:latest", "temperature": 0.2 }
+      }
     },
     "litellm": {
-      "backend": "openai",
       "endpoint": "http://localhost:4000",
-      "model": "nemotron-3.5-lightning",
       "api_key_env": "LITELLM_API_KEY",
-      "mcp_servers": ["searxng_mcp"]
+      "default_model": "nemotron",
+      "tools": ["read", "write"],
+      "mcp_servers": ["searxng_mcp", "files_mcp"],
+      "models": {
+        "nemotron": {
+          "id": "nemotron-3.5-lightning",
+          "mcp_servers": ["searxng_mcp"]
+        },
+        "readonly": {
+          "id": "nemotron-3.5-lightning",
+          "tools": ["read"],
+          "mcp_servers": []
+        }
+      }
     }
   }
 }
 ```
 
+A **gateway** is one endpoint. It lists the **models** you can use on it and sets
+the ceiling for what they may do: which local tools (`-r`, `-w`, `-x`) and which
+MCP servers they can reach. A model can only narrow that ceiling, never widen
+it.
+
 ### Ollama
 
 Ollama's OpenAI-compatible API needs no key, so leave `api_key_env` out. Pull
-the model first (`ollama pull hermes3`), or set `model` to something from
-`ollama list`; otherwise the first call returns `HTTP 404: model ... not
-found`. Give large models a longer `timeout`, since the first call loads the
+the model first (`ollama pull hermes3`), or set the model's `id` to something
+from `ollama list`; otherwise the first call returns `HTTP 404: model ... not
+found`. Give large models a longer `timeout` (top level, or on the gateway or model), since the first call loads the
 model. Tools (`-r`, `-w`, `-x`) need a model that supports tool calling;
 hermes3 does.
 
@@ -317,43 +335,82 @@ durable option.
 
 | Key | Meaning |
 |---|---|
-| `default` | Profile used when `-p` isn't given (set it with `qq -d NAME`) |
+| `default` | The model used when `-p` isn't given, as `gateway/model` (set it with `qq -d NAME`) |
 | `system_prompt` | Extra steering added to every request |
 | `timeout` | Seconds allowed per call (default 120) |
-| `profiles` | Named endpoint settings (required) |
+| `gateways` | The endpoints and their models (required) |
 
-### Profiles
+The old `profiles` format is no longer read; `qq` says so and stops. To convert
+one, move its `endpoint` and `api_key_env` into a gateway and its `model` into
+that gateway's `models`, as the model's `id` (its name in `models` can be the
+same string).
+
+### Gateways
 
 | Key | Meaning |
 |---|---|
 | `endpoint` | Base URL; `/chat/completions` is added unless it's already there. **Required.** |
-| `model` | Model name. **Required.** |
-| `api_key_env` | Name of the environment variable that holds the key, sent as `Authorization: Bearer`. Keys never go in the file, and naming a variable that is unset or empty is an error (exit 2). Omit the key entirely for an endpoint that needs no auth. |
-| `temperature`, `max_tokens` | Passed through when set |
-| `system_prompt` | Steering for this profile |
-| `mcp_servers` | LiteLLM MCP server names to offer as tools (see below) |
-| `tools` | `false` forbids `-r`, `-w` and `-x` on this profile; anything else, including leaving it out, allows them |
-| `mcp` | `false` ignores this profile's `mcp_servers`; anything else, including leaving it out, offers them |
-| `allow_danger` | `true` lets `-y` skip every approval on this profile; off unless set (see [Skipping approval](#skipping-approval--y)) |
-| `backend` | Optional; `openai` is the only value accepted |
+| `models` | The models on this gateway, an object keyed by the name you type. **Required**, and needs at least one. |
+| `default_model` | The model used when only the gateway is named (`-p litellm`); the first one listed if omitted |
+| `api_key_env` | Name of the environment variable that holds the key, sent as `Authorization: Bearer`. Keys never go in the file, and naming a variable that is unset or empty is an error (exit 2) when a model on the gateway is used. Omit it for an endpoint that needs no auth. |
+| `tools` | Which of `-r`, `-w` and `-x` its models may be used with: any of `"read"`, `"write"`, `"exec"`. **A gateway grants nothing it doesn't list.** |
+| `mcp_servers` | LiteLLM MCP server names its models can offer (see below). Nothing is offered if omitted. |
+| `allow_danger` | `true` lets `-y` skip every approval for its models; off unless set (see [Skipping approval](#skipping-approval--y)) |
+| `system_prompt`, `temperature`, `max_tokens`, `timeout` | Defaults for its models |
+
+### Models
+
+A model is an entry in a gateway's `models`. Its key is the name you type with
+`-p`. All of its members are optional, so `"hermes3": {}` is a model.
+
+| Key | Meaning |
+|---|---|
+| `id` | What is sent to the API as the model name. Defaults to the key, so use `id` for a name you'd rather not type (`hermes3:latest`) or to list one model twice with different limits. |
+| `system_prompt`, `temperature`, `max_tokens`, `timeout` | Override the gateway's value for this model |
+| `tools` | A subset of the gateway's `tools`. Leave it out to inherit all of them; `[]` means none. |
+| `mcp_servers` | A subset of the gateway's `mcp_servers`. Leave it out to inherit all of them; `[]` means none. |
+| `allow_danger` | May only be `false`, to opt out of a gateway that allows `-y` |
+
+A model that lists something its gateway doesn't grant is a configuration error
+(exit 2), not something quietly ignored. So is a misspelt key, a retired one
+(`mcp`, `backend`, or a boolean `tools`), a repeated model or gateway name, a
+gateway with no models, and a `default_model` that isn't one of its models. The
+whole file is checked on every run, so a mistake in a gateway you aren't using is
+still reported. Only the selected gateway's `api_key_env` has to be set.
+
+`tools` is a ceiling, not a switch: it says what `-r`, `-w` and `-x` are
+*allowed* to do with the model, and you still have to pass the flag to get the
+tool. `-w` on a model whose `tools` lack `"write"` is refused with an error
+(exit 2) rather than quietly ignored, since you asked for the flag on purpose.
+Local tools and MCP servers are independent: a model with `"mcp_servers": []`
+can still use `-r`.
 
 The model must support OpenAI-style tool calling for `-r`, `-w`, `-x` and
 `mcp_servers` to work.
 
-`tools` and `mcp` are switches you have to set deliberately: both are on unless
-a profile says `false` outright. They are for a profile that should never touch
-your machine, or one whose MCP servers you want to silence without deleting the
-list:
+### Choosing a model
 
-```json
-"readonly": { "endpoint": "http://localhost:4000", "model": "m", "tools": false },
-"nosearch": { "endpoint": "http://localhost:4000", "model": "m", "mcp": false,
-              "mcp_servers": ["searxng_mcp"] }
+`-p` (and `default`, and `-d`) take one of:
+
+- `gateway/model`, such as `litellm/nemotron`. This is always unambiguous.
+- `model`, when exactly one gateway has a model of that name. If two do, `qq`
+  refuses and lists them (`"reader" is ambiguous; use gateway/model: lt/reader,
+  danger/reader`) rather than guess which endpoint you meant.
+- `gateway`, for that gateway's `default_model`.
+
+Model names may contain `/` (`meta/llama-3`). The first `/` only separates a
+gateway when what comes before it is a gateway's name; otherwise the whole thing
+is a model name. If you have a gateway called `meta` as well as a model called
+`meta/llama-3` on some other gateway `x`, write `x/meta/llama-3`.
+
+`qq -l` shows the result of all this, one line per model:
+
 ```
-
-`-r`, `-w` or `-x` on a profile with `"tools": false` is refused with an error
-(exit 2) rather than quietly ignored, since you asked for the flag on purpose.
-The two are independent: a profile with `"mcp": false` can still use `-r`.
+$ qq -l
+* ollama/hermes3    tools=none  mcp=none  danger=no
+  litellm/nemotron  tools=read,write  mcp=searxng_mcp  danger=no
+  litellm/readonly  tools=read  mcp=none  danger=no
+```
 
 ## How the prompt is steered
 
@@ -362,10 +419,11 @@ lines. Empty parts are skipped.
 
 1. `qq`'s built-in instruction: answer directly, in plain text, with no markdown or preamble.
 2. The top-level `system_prompt`.
-3. The profile's `system_prompt`.
-4. `-s text`.
-5. The environment line, when `-c` (or `-r`, `-w`, `-x`) is given.
-6. With `-r`, `-w` or `-x`, a note that the model has tools and how approval
+3. The gateway's `system_prompt`.
+4. The model's `system_prompt`.
+5. `-s text`.
+6. The environment line, when `-c` (or `-r`, `-w`, `-x`) is given.
+7. With `-r`, `-w` or `-x`, a note that the model has tools and how approval
    works.
 
 Replies are trimmed. A leading `<think>…</think>` block, which some reasoning
@@ -373,7 +431,7 @@ models emit, is removed.
 
 ## MCP tools through LiteLLM
 
-When a profile lists `mcp_servers`, each server is offered to the model like this:
+When a model has `mcp_servers` (its own list, or its gateway's), each server is offered to the model like this:
 
 ```json
 {"type": "mcp", "server_label": "searxng_mcp",

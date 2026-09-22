@@ -313,22 +313,47 @@ static void test_tools(void)
 }
 
 static const char sample[] =
-	"{\"default\":\"local\",\"system_prompt\":\"global\",\"profiles\":{"
-	"\"local\":{\"backend\":\"openai\",\"endpoint\":\"http://h/v1\",\"model\":\"m\","
-	"\"api_key_env\":\"KEY\",\"temperature\":0.5,\"max_tokens\":64,\"mcp_servers\":[\"searx\"]},"
-	"\"plain\":{\"endpoint\":\"http://p\",\"model\":\"m2\",\"api_key_env\":\"\",\"system_prompt\":\"steer\"}}}";
+	"{\"default\":\"local/m\",\"system_prompt\":\"global\",\"timeout\":90,\"gateways\":{"
+	"\"local\":{\"endpoint\":\"http://h/v1\",\"api_key_env\":\"KEY\",\"system_prompt\":\"gw\","
+	"\"temperature\":0.5,\"max_tokens\":64,\"timeout\":60,\"tools\":[\"read\",\"write\"],"
+	"\"mcp_servers\":[\"searx\",\"other\"],\"allow_danger\":true,\"models\":{"
+	"\"m\":{\"id\":\"real-m\"},"
+	"\"narrow\":{\"tools\":[\"read\"],\"mcp_servers\":[\"searx\"],\"system_prompt\":\"model\","
+	"\"temperature\":0.9,\"max_tokens\":8,\"timeout\":5,\"allow_danger\":false},"
+	"\"none\":{\"tools\":[],\"mcp_servers\":[]},"
+	"\"meta/llama\":{}}},"
+	"\"plain\":{\"endpoint\":\"http://p\",\"api_key_env\":\"\",\"default_model\":\"m2\","
+	"\"models\":{\"m\":{},\"m2\":{}}}}}";
 
-/* Parse json and resolve name; returns the result and leaves the message in err. */
-static int try_profile(const char *json, const char *name, char *err, size_t errlen)
+/* One gateway "g" at http://h with the given members, and a model "m" with
+ * the given members; either may be empty. */
+static void gw_json(char *buf, size_t n, const char *gateway, const char *model)
+{
+	snprintf(buf, n,
+		 "{\"gateways\":{\"g\":{\"endpoint\":\"http://h\"%s%s,\"models\":{\"m\":{%s}}}}}",
+		 *gateway ? "," : "", gateway, model);
+}
+
+/* Parse json and resolve sel; returns the result and leaves the message in err. */
+static int try_select(const char *json, const char *sel, char *err, size_t errlen)
 {
 	struct config c = {0};
 	struct profile p;
 	int r = config_parse(&c, json, strlen(json), err, errlen);
 
 	if (!r)
-		r = config_profile(&c, name, &p, err, errlen);
+		r = config_profile(&c, sel, &p, err, errlen);
 	config_free(&c);
 	return r;
+}
+
+/* Parse a one-model config built by gw_json. */
+static int try_gw(const char *gateway, const char *model, char *err, size_t errlen)
+{
+	char json[1024];
+
+	gw_json(json, sizeof json, gateway, model);
+	return try_select(json, "g", err, errlen);
 }
 
 static void test_log(void)
@@ -400,152 +425,232 @@ static void test_config(void)
 
 	setenv("KEY", "sk-unit", 1);
 	CHECK(config_parse(&c, sample, strlen(sample), err, sizeof err) == 0);
-	STREQ(c.default_profile, "local");
+	STREQ(c.default_sel, "local/m");
 	STREQ(c.system_prompt, "global");
-	CHECK(c.timeout == 120);
+	CHECK(c.timeout == 90);
 
+	/* The default, and everything a model inherits from its gateway. */
 	CHECK(config_profile(&c, NULL, &p, err, sizeof err) == 0);
-	STREQ(p.name, "local");
+	STREQ(p.gateway, "local");
+	STREQ(p.name, "m");
+	STREQ(p.model, "real-m"); /* "id" is what the API is sent */
 	STREQ(p.endpoint, "http://h/v1");
-	STREQ(p.model, "m");
 	STREQ(p.api_key_env, "KEY");
-	CHECK(p.temperature == 0.5);
-	CHECK(p.max_tokens == 64);
+	STREQ(p.gateway_prompt, "gw");
 	CHECK(!p.system_prompt);
-	CHECK(cJSON_GetArraySize(p.mcp_servers) == 1);
-	CHECK(p.tools == 1 && p.mcp == 1); /* on unless a profile says otherwise */
-	CHECK(p.allow_danger == 0);        /* off unless a profile says otherwise */
+	CHECK(p.temperature == 0.5 && p.max_tokens == 64 && p.timeout == 60);
+	CHECK(p.tools == (TOOLS_READ | TOOLS_WRITE));
+	CHECK(cJSON_GetArraySize(p.mcp_servers) == 2);
+	CHECK(p.allow_danger == 1);
 
-	/* "backend" is optional */
+	/* A model narrows tools, servers and allow_danger, and overrides tuning. */
+	CHECK(config_profile(&c, "local/narrow", &p, err, sizeof err) == 0);
+	STREQ(p.model, "narrow"); /* no "id": the name is the id */
+	CHECK(p.tools == TOOLS_READ);
+	CHECK(cJSON_GetArraySize(p.mcp_servers) == 1);
+	STREQ(cJSON_GetArrayItem(p.mcp_servers, 0)->valuestring, "searx");
+	CHECK(p.allow_danger == 0);
+	STREQ(p.gateway_prompt, "gw");
+	STREQ(p.system_prompt, "model");
+	CHECK(p.temperature == 0.9 && p.max_tokens == 8 && p.timeout == 5);
+
+	/* [] is "none", not "inherit". */
+	CHECK(config_profile(&c, "local/none", &p, err, sizeof err) == 0);
+	CHECK(p.tools == 0 && !p.mcp_servers);
+
+	/* A gateway with no timeout uses the top-level one. */
 	CHECK(config_profile(&c, "plain", &p, err, sizeof err) == 0);
-	STREQ(p.endpoint, "http://p");
-	STREQ(p.model, "m2");
+	STREQ(p.gateway, "plain");
+	STREQ(p.name, "m2"); /* its "default_model" */
+	CHECK(p.timeout == 90);
 	CHECK(!p.api_key_env); /* "" is treated as unset */
-	CHECK(isnan(p.temperature));
-	CHECK(p.max_tokens == 0);
-	CHECK(!p.mcp_servers);
-	STREQ(p.system_prompt, "steer");
+	CHECK(isnan(p.temperature) && p.max_tokens == 0);
+	CHECK(p.tools == 0 && !p.mcp_servers && p.allow_danger == 0);
+	CHECK(!p.gateway_prompt && !p.system_prompt);
+
+	/* Selecting: unique bare names, qualified names, gateway names. */
+	CHECK(config_profile(&c, "narrow", &p, err, sizeof err) == 0);
+	STREQ(p.gateway, "local");
+	CHECK(config_profile(&c, "m2", &p, err, sizeof err) == 0);
+	STREQ(p.gateway, "plain");
+	CHECK(config_profile(&c, "plain/m", &p, err, sizeof err) == 0);
+	STREQ(p.gateway, "plain");
+	STREQ(p.name, "m");
+	CHECK(config_profile(&c, "local", &p, err, sizeof err) == 0);
+	STREQ(p.name, "m"); /* no "default_model": the first one listed */
+
+	/* A model id with a "/" in it: bare, or after its gateway. */
+	CHECK(config_profile(&c, "meta/llama", &p, err, sizeof err) == 0);
+	STREQ(p.gateway, "local");
+	STREQ(p.name, "meta/llama");
+	CHECK(config_profile(&c, "local/meta/llama", &p, err, sizeof err) == 0);
+	STREQ(p.name, "meta/llama");
+
+	/* The same name on two gateways is never guessed. */
+	CHECK(config_profile(&c, "m", &p, err, sizeof err) != 0);
+	CHECK(strstr(err, "\"m\" is ambiguous; use gateway/model: local/m, plain/m"));
 
 	CHECK(config_profile(&c, "nope", &p, err, sizeof err) != 0);
-	CHECK(strstr(err, "unknown profile \"nope\" (available: local, plain)"));
+	CHECK(strstr(err, "unknown model or gateway \"nope\" (available: local/m, local/narrow, "
+			  "local/none, local/meta/llama, plain/m, plain/m2)"));
+	CHECK(config_profile(&c, "local/nope", &p, err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"local\" has no model \"nope\" (models: m, narrow, none, meta/llama)"));
+	CHECK(config_profile(&c, "plain/narrow", &p, err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"plain\" has no model \"narrow\""));
 
 	/* "api_key_env" holding the key itself, rather than a variable name, used
 	 * to send no Authorization header at all. */
 	unsetenv("KEY");
-	CHECK(config_profile(&c, "local", &p, err, sizeof err) != 0);
-	CHECK(strstr(err, "profile \"local\": \"api_key_env\" names environment variable KEY, "
+	CHECK(config_profile(&c, "local/m", &p, err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"local\": \"api_key_env\" names environment variable KEY, "
 			  "which is not set"));
 	setenv("KEY", "", 1);
-	CHECK(config_profile(&c, "local", &p, err, sizeof err) != 0);
+	CHECK(config_profile(&c, "local/m", &p, err, sizeof err) != 0);
 	CHECK(strstr(err, "environment variable KEY, which is empty"));
+	/* Only the selected gateway's key matters. */
+	CHECK(config_profile(&c, "plain/m", &p, err, sizeof err) == 0);
 	setenv("KEY", "sk-unit", 1);
-	CHECK(config_profile(&c, "local", &p, err, sizeof err) == 0);
+	CHECK(config_profile(&c, "local/m", &p, err, sizeof err) == 0);
 
-	/* A profile with no "api_key_env" needs no variable. */
-	CHECK(config_profile(&c, "plain", &p, err, sizeof err) == 0);
-
-	/* -l: config order, "* " on the profile that would be used. */
+	/* -l: config order, "* " on the one that would be used, permissions shown. */
 	config_list(&c, NULL, &l);
-	STREQ(l.data, "* local\n  plain\n");
+	STREQ(l.data,
+	      "* local/m           tools=read,write  mcp=searx,other  danger=yes\n"
+	      "  local/narrow      tools=read  mcp=searx  danger=no\n"
+	      "  local/none        tools=none  mcp=none  danger=yes\n"
+	      "  local/meta/llama  tools=read,write  mcp=searx,other  danger=yes\n"
+	      "  plain/m           tools=none  mcp=none  danger=no\n"
+	      "  plain/m2          tools=none  mcp=none  danger=no\n");
 	buf_free(&l);
-	config_list(&c, "plain", &l);
-	STREQ(l.data, "  local\n* plain\n");
+	config_list(&c, "plain", &l); /* a gateway alone is its default model */
+	CHECK(strstr(l.data, "* plain/m2 ") && !strstr(l.data, "* local"));
 	buf_free(&l);
 	config_list(&c, "gone", &l); /* nothing to mark */
-	STREQ(l.data, "  local\n  plain\n");
+	CHECK(!strstr(l.data, "*"));
 	buf_free(&l);
+	config_list(&c, "m", &l); /* ambiguous: nothing to mark either */
+	CHECK(!strstr(l.data, "*"));
+	buf_free(&l);
+	unsetenv("KEY"); /* -l never needs a key */
+	config_list(&c, NULL, &l);
+	CHECK(strstr(l.data, "* local/m "));
+	buf_free(&l);
+	setenv("KEY", "sk-unit", 1);
 	config_free(&c);
 
-	/* An empty "profiles" object lists nothing at all. */
-	CHECK(config_parse(&c, "{\"profiles\":{}}", 15, err, sizeof err) == 0);
+	/* An empty "gateways" object lists nothing at all. */
+	CHECK(config_parse(&c, "{\"gateways\":{}}", 15, err, sizeof err) == 0);
 	config_list(&c, NULL, &l);
 	CHECK(!l.data);
 	buf_free(&l);
 	config_free(&c);
 
-	/* "tools" and "mcp" are off only when a profile says false outright. */
-	{
-		struct config s2 = {0};
-		struct profile q;
-		static const char switches[] =
-			"{\"profiles\":{"
-			"\"off\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":false,"
-			"\"mcp\":false,\"mcp_servers\":[\"searx\"]},"
-			"\"on\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":true,"
-			"\"mcp\":true,\"allow_danger\":true,\"mcp_servers\":[\"searx\"]},"
-			"\"null\":{\"endpoint\":\"http://h\",\"model\":\"m\",\"tools\":null}}}";
+	/* Narrow, never widen. */
+	CHECK(try_gw("\"tools\":[\"read\"]", "\"tools\":[\"read\",\"exec\"]", err, sizeof err) != 0);
+	CHECK(strstr(err, "model \"g/m\": \"tools\" lists \"exec\", which gateway \"g\" does not allow"));
+	CHECK(try_gw("", "\"tools\":[\"read\"]", err, sizeof err) != 0); /* a gateway grants only what it lists */
+	CHECK(strstr(err, "which gateway \"g\" does not allow"));
+	CHECK(try_gw("\"mcp_servers\":[\"a\"]", "\"mcp_servers\":[\"a\",\"b\"]", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"mcp_servers\" lists \"b\", which gateway \"g\" does not allow"));
+	CHECK(try_gw("", "\"mcp_servers\":[\"a\"]", err, sizeof err) != 0);
+	CHECK(try_gw("", "\"allow_danger\":true", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"allow_danger\" is true, but gateway \"g\" does not allow it"));
+	CHECK(try_gw("\"allow_danger\":true", "\"allow_danger\":true", err, sizeof err) == 0);
+	CHECK(try_gw("", "\"allow_danger\":false", err, sizeof err) == 0);
+	CHECK(try_gw("\"tools\":[\"read\"]", "\"tools\":[]", err, sizeof err) == 0);
 
-		CHECK(config_parse(&s2, switches, strlen(switches), err, sizeof err) == 0);
-		CHECK(config_profile(&s2, "off", &q, err, sizeof err) == 0);
-		CHECK(q.tools == 0 && q.mcp == 0);
-		CHECK(q.allow_danger == 0); /* absent stays off, unlike tools and mcp */
-		CHECK(!q.mcp_servers); /* "mcp": false hides the servers it lists */
-		CHECK(config_profile(&s2, "on", &q, err, sizeof err) == 0);
-		CHECK(q.tools == 1 && q.mcp == 1);
-		CHECK(q.allow_danger == 1);
-		CHECK(cJSON_GetArraySize(q.mcp_servers) == 1);
-		CHECK(config_profile(&s2, "null", &q, err, sizeof err) == 0);
-		CHECK(q.tools == 1); /* null is "unset", like a missing member */
-		config_free(&s2);
-	}
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
-			  "\"model\":\"m\",\"tools\":\"yes\"}}}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "profile \"x\": \"tools\" must be true or false"));
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
-			  "\"model\":\"m\",\"mcp\":1}}}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "profile \"x\": \"mcp\" must be true or false"));
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"http://h\","
-			  "\"model\":\"m\",\"allow_danger\":\"yes\"}}}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "profile \"x\": \"allow_danger\" must be true or false"));
+	/* Mistakes in a gateway that is not being selected are still reported. */
+	CHECK(try_select("{\"gateways\":{\"a\":{\"endpoint\":\"e\",\"models\":{\"x\":{}}},"
+			 "\"b\":{\"endpoint\":\"e\",\"tools\":[\"read\"],\"models\":{\"y\":{\"tools\":[\"exec\"]}}}}}",
+			 "a", err, sizeof err) != 0);
+	CHECK(strstr(err, "model \"b/y\""));
 
-	CHECK(try_profile("{\"profiles\":{}}", NULL, err, sizeof err) != 0);
-	CHECK(strstr(err, "no profile selected"));
+	/* Shape and types. */
+	CHECK(try_gw("\"tools\":false", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\": \"tools\" must be an array of \"read\", \"write\" and \"exec\""));
+	CHECK(try_gw("\"tools\":[\"delete\"]", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"tools\" must be an array of"));
+	CHECK(try_gw("", "\"tools\":[7]", err, sizeof err) != 0);
+	CHECK(try_gw("\"mcp\":false", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"mcp\" is no longer supported: list \"mcp_servers\", and use [] for none"));
+	CHECK(try_gw("", "\"mcp\":false", err, sizeof err) != 0);
+	CHECK(try_gw("\"mcp_servers\":\"searx\"", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"mcp_servers\" must be an array of server names"));
+	CHECK(try_gw("\"mcp_servers\":[\"ok\",\"\"]", "", err, sizeof err) != 0);
+	CHECK(try_gw("\"mcp_servers\":[]", "", err, sizeof err) == 0);
+	CHECK(try_gw("\"allow_danger\":\"yes\"", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\": \"allow_danger\" must be true or false"));
+	CHECK(try_gw("\"colour\":1", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\": unknown key \"colour\""));
+	CHECK(try_gw("", "\"endpoint\":\"x\"", err, sizeof err) != 0);
+	CHECK(strstr(err, "model \"g/m\": unknown key \"endpoint\""));
+	CHECK(try_gw("\"backend\":\"openai\"", "", err, sizeof err) != 0);
+	CHECK(try_gw("\"temperature\":\"hot\"", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"temperature\" must be a number"));
+	CHECK(try_gw("", "\"max_tokens\":0", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"max_tokens\" must be a positive integer"));
+	CHECK(try_gw("\"timeout\":0", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"timeout\" must be a number of seconds"));
+	CHECK(try_gw("", "\"id\":7", err, sizeof err) != 0);
+	CHECK(strstr(err, "model \"g/m\": \"id\" must be a string"));
+	CHECK(try_gw("", "\"system_prompt\":7", err, sizeof err) != 0);
+	CHECK(try_gw("\"default_model\":\"zzz\"", "", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\": \"default_model\" must name one of its models"));
+	CHECK(try_gw("\"default_model\":\"m\"", "", err, sizeof err) == 0);
 
-	CHECK(try_profile("{\n\"profiles\":\n{,}}", "x", err, sizeof err) != 0);
+	CHECK(try_select("{\"gateways\":{\"g\":{\"models\":{\"m\":{}}}}}", "g", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\": a gateway requires \"endpoint\""));
+	CHECK(try_select("{\"gateways\":{\"g\":{\"endpoint\":\"e\"}}}", "g", err, sizeof err) != 0);
+	CHECK(strstr(err, "a gateway requires a \"models\" object with a model in it"));
+	CHECK(try_select("{\"gateways\":{\"g\":{\"endpoint\":\"e\",\"models\":{}}}}", "g", err, sizeof err) != 0);
+	CHECK(try_select("{\"gateways\":{\"g\":{\"endpoint\":\"e\",\"models\":{\"m\":7}}}}", "g", err, sizeof err) != 0);
+	CHECK(strstr(err, "model \"g/m\": must be an object"));
+	CHECK(try_select("{\"gateways\":{\"g\":7}}", "g", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\": must be an object"));
+	CHECK(try_select("{\"gateways\":{\"a/b\":{\"endpoint\":\"e\",\"models\":{\"m\":{}}}}}", "a/b/m",
+			 err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway name \"a/b\" must not be empty or contain \"/\""));
+	CHECK(try_select("{\"gateways\":{\"\":{\"endpoint\":\"e\",\"models\":{\"m\":{}}}}}", "m",
+			 err, sizeof err) != 0);
+	CHECK(try_select("{\"gateways\":{\"g\":{\"endpoint\":\"e\",\"models\":{\"\":{}}}}}", "g",
+			 err, sizeof err) != 0);
+	CHECK(strstr(err, "a model name must not be empty"));
+	CHECK(try_select("{\"gateways\":{\"g\":{\"endpoint\":\"e\",\"models\":{\"m\":{},\"m\":{}}}}}", "g",
+			 err, sizeof err) != 0);
+	CHECK(strstr(err, "model \"g/m\": is listed twice"));
+	CHECK(try_select("{\"gateways\":{\"g\":{\"endpoint\":\"e\",\"models\":{\"m\":{}}},"
+			 "\"g\":{\"endpoint\":\"e\",\"models\":{\"m\":{}}}}}", "g", err, sizeof err) != 0);
+	CHECK(strstr(err, "gateway \"g\" is listed twice"));
+
+	/* Selecting with nothing to go on. */
+	CHECK(try_select("{\"gateways\":{}}", NULL, err, sizeof err) != 0);
+	CHECK(strstr(err, "no model selected"));
+	CHECK(try_select("{\"default\":\"gone/x\",\"gateways\":{\"g\":{\"endpoint\":\"e\",\"models\":{\"m\":{}}}}}",
+			 NULL, err, sizeof err) != 0);
+	CHECK(strstr(err, "unknown model or gateway \"gone/x\" (available: g/m)"));
+
+	/* A gateway and a model with the same name are both readings of a bare name. */
+	CHECK(try_select("{\"gateways\":{\"x\":{\"endpoint\":\"e\",\"default_model\":\"y\","
+			 "\"models\":{\"y\":{}}},\"z\":{\"endpoint\":\"e\",\"models\":{\"x\":{}}}}}",
+			 "x", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"x\" is ambiguous; use gateway/model: x/y, z/x"));
+	/* ... unless they are the same model. */
+	CHECK(try_select("{\"gateways\":{\"x\":{\"endpoint\":\"e\",\"models\":{\"x\":{}}}}}",
+			 "x", err, sizeof err) == 0);
+
+	CHECK(try_select("{\n\"gateways\":\n{,}}", "x", err, sizeof err) != 0);
 	CHECK(strstr(err, "invalid JSON near line 3"));
-
-	CHECK(try_profile("[]", "x", err, sizeof err) != 0);
+	CHECK(try_select("[]", "x", err, sizeof err) != 0);
 	CHECK(strstr(err, "must be a JSON object"));
-
-	CHECK(try_profile("{}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "\"profiles\" object"));
-
-	CHECK(try_profile("{\"timeout\":\"soon\",\"profiles\":{}}", "x", err, sizeof err) != 0);
+	CHECK(try_select("{}", "x", err, sizeof err) != 0);
+	CHECK(strstr(err, "\"gateways\" object"));
+	CHECK(try_select("{\"timeout\":\"soon\",\"gateways\":{}}", "x", err, sizeof err) != 0);
 	CHECK(strstr(err, "\"timeout\""));
 
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"backend\":\"gemini\",\"endpoint\":\"e\",\"model\":\"m\"}}}",
-			  "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "unknown backend \"gemini\" (only openai is supported)"));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"backend\":7,\"endpoint\":\"e\",\"model\":\"m\"}}}",
-			  "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "profile \"x\": \"backend\" must be a string"));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{}}}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "requires \"endpoint\" and \"model\""));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":\"\"}}}", "x",
-			  err, sizeof err) != 0);
-	CHECK(strstr(err, "requires \"endpoint\" and \"model\""));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":7}}}", "x",
-			  err, sizeof err) != 0);
-	CHECK(strstr(err, "profile \"x\": \"model\" must be a string"));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":\"m\",\"max_tokens\":0}}}",
-			  "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "\"max_tokens\""));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":\"m\","
-			  "\"mcp_servers\":\"searx\"}}}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "\"mcp_servers\" must be an array of server names"));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":\"m\","
-			  "\"mcp_servers\":[\"ok\",\"\"]}}}", "x", err, sizeof err) != 0);
-	CHECK(strstr(err, "\"mcp_servers\" must be an array of server names"));
-
-	CHECK(try_profile("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":\"m\","
-			  "\"mcp_servers\":[]}}}", "x", err, sizeof err) == 0);
+	/* The old format gets a pointer to the new one, not a puzzling error. */
+	CHECK(try_select("{\"profiles\":{\"x\":{\"endpoint\":\"e\",\"model\":\"m\"}}}", "x",
+			 err, sizeof err) != 0);
+	CHECK(strstr(err, "\"profiles\" is no longer supported"));
 }
 
 int main(void)

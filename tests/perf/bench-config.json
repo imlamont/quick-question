@@ -1,0 +1,14 @@
+{
+  "default": "bench/test-model",
+  "timeout": 30,
+  "gateways": {
+    "bench": {
+      "endpoint": "http://127.0.0.1:8971/v1",
+      "tools": ["read"],
+      "models": {
+        "test-model": {},
+        "lister": {}
+      }
+    }
+  }
+}

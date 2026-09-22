@@ -1,14 +1,12 @@
-.TH QQ 1 "2026-09-15" "qq 0.3.0" "User Commands"
+.TH QQ 1 "2026-09-22" "qq 0.4.0" "User Commands"
 .SH NAME
 qq \- ask an AI model a quick question
 .SH SYNOPSIS
 .B qq
 .RB [ \-hclrvwxy ]
 .RB [ \-d
-.IR profile ]
+.IR model ]
 .RB [ \-p
-.IR profile ]
-.RB [ \-m
 .IR model ]
 .RB [ \-s
 .IR text ]
@@ -28,7 +26,7 @@ The request tells the model to answer briefly and directly, without markdown.
 It works with any OpenAI-compatible
 .B /chat/completions
 endpoint.
-Endpoints are set up as named profiles in a JSON file; see
+Endpoints are set up as gateways, each listing its models, in a JSON file; see
 .BR CONFIGURATION .
 .PP
 When standard input is not a terminal,
@@ -51,13 +49,18 @@ Print usage and exit.
 Print the version and exit.
 .TP
 .B \-l
-List the names of the configured profiles, one per line, in the order they
-appear in the file, and exit. The profile that would be used is marked with
+List the configured models, one per line, in the order they appear in the
+file, and exit. Each line is
+.IB gateway / model
+followed by the tools, MCP servers and
+.B allow_danger
+that model ends up with once its gateway's settings and its own are combined.
+The model that would be used is marked with
 .RB \(lq "* " \(rq,
 which is the one named by
 .B \-p
-when it is given, and the default otherwise. Profiles are not validated, so
-one that would fail to run is still listed.
+when it is given, and the default otherwise.
+API keys are not checked, so a model whose key is not set is still listed.
 .TP
 .B \-c
 Add a line describing the environment (operating system, shell, current
@@ -73,23 +76,34 @@ Let the model create and edit files.
 .B \-x
 Let the model run shell commands.
 .TP
-.BI \-p " profile"
-Use
-.I profile
-for this call instead of the default.
-.TP
-.BI \-d " profile"
-Save
-.I profile
-as the default in the configuration file, then run the prompt if one was
-given.
-The file is replaced atomically; a symbolic link to it keeps working and the
-file mode is kept.
-.TP
-.BI \-m " model"
+.BI \-p " model"
 Use
 .I model
-instead of the profile's model.
+for this call instead of the default.
+.I model
+is
+.IB gateway / model \fR,
+or just a model name when only one gateway has a model of that name; if
+several do, the call is refused and the
+.IB gateway / model
+spellings that would settle it are listed.
+A gateway name alone selects that gateway's
+.BR default_model .
+A
+.RB \(lq / \(rq
+separates a gateway only when what precedes it is a gateway's name, so model
+names such as
+.B meta/llama\-3
+work bare.
+.TP
+.BI \-d " model"
+Save
+.I model
+as the default in the configuration file, written as
+.IB gateway / model \fR,
+then run the prompt if one was given.
+The file is replaced atomically; a symbolic link to it keeps working and the
+file mode is kept.
 .TP
 .BI \-s " text"
 Append
@@ -110,11 +124,11 @@ as soon as the model asks, and no terminal is needed, so
 .B qq
 will do them in a script or a cron job where it would otherwise refuse for want
 of one.
-The flag is not enough by itself: the profile must have
+The flag is not enough by itself: the model's gateway must have
 .BR "allow_danger" : true ,
 which is off unless set, and
 .B \-y
-on any other profile is an error (exit 2) that does nothing.
+on any other model is an error (exit 2) that does nothing.
 Each action is still printed on standard error before it happens.
 MCP calls are unaffected, never having been approved: they run on the server,
 not on this machine.
@@ -129,7 +143,7 @@ its UTC offset:
 .B command
 (the whole command line as invoked, quoted the way a shell would need it),
 .BR start ,
-.BR profile ,
+.BR model ,
 .BR timeout ,
 .B request
 (the URL and the entire request body, chat and MCP alike),
@@ -218,15 +232,23 @@ The configuration file holds a JSON object:
 .RS
 .nf
 {
-  "default": "local",
+  "default": "litellm/nemotron",
   "system_prompt": "Answer concisely in plain text.",
   "timeout": 120,
-  "profiles": {
-    "local": {
+  "gateways": {
+    "litellm": {
       "endpoint": "http://localhost:4000",
-      "model": "nemotron-3.5-lightning",
       "api_key_env": "LITELLM_API_KEY",
-      "mcp_servers": ["searxng_mcp"]
+      "default_model": "nemotron",
+      "tools": ["read", "write"],
+      "mcp_servers": ["searxng_mcp", "files_mcp"],
+      "models": {
+        "nemotron": {
+          "id": "nemotron-3.5-lightning",
+          "mcp_servers": ["searxng_mcp"]
+        },
+        "readonly": { "id": "nemotron-3.5-lightning", "tools": ["read"] }
+      }
     }
   }
 }
@@ -234,53 +256,101 @@ The configuration file holds a JSON object:
 .RE
 .PP
 The top-level keys are
-.BR default ,
+.BR default
+(a
+.IB gateway / model \fR),
 .BR system_prompt ,
 .BR timeout ,
 and
-.BR profiles ,
+.BR gateways ,
 which is required.
+The old
+.B profiles
+key is no longer read.
 .PP
-A profile requires
+A gateway is one endpoint.
+It requires
 .B endpoint
 and
-.BR model .
+.BR models ,
+an object with at least one model in it.
 It also accepts
+.BR default_model ,
 .BR api_key_env ,
 the name of an environment variable that holds a bearer token \(em the
-variable itself, not the key, and it must be set to a non-empty value or
+variable itself, not the key, and it must be set to a non-empty value when a
+model on the gateway is used or
 .B qq
-exits 2 \(em and
+exits 2 \(em and defaults for its models:
 .BR temperature ,
 .BR max_tokens ,
-.B system_prompt
+.BR timeout
 and
-.BR mcp_servers .
-An optional
-.B backend
-key may only be
-.BR openai .
+.BR system_prompt .
 .PP
-Two switches turn capabilities off for a profile, and only an explicit
-.B false
-does so; both are on when the key is absent.
-.B "tools" : false
-makes
+A gateway also sets the ceiling for what its models may do.
+.B tools
+lists which of
+.BR read ,
+.B write
+and
+.B exec
+its models may be used with (\c
 .BR \-r ,
 .B \-w
 and
-.B \-x
-unusable with that profile, refused with an error (exit 2) rather than silently
-ignored, and
-.B "mcp" : false
-ignores the profile's
-.BR mcp_servers .
-.B "allow_danger" : true ,
-off unless set, is what
+.BR \-x ),
+.B mcp_servers
+names the MCP servers they may offer, and
+.BR "allow_danger" : true
+is what
 .B \-y
 requires.
-They are independent: a profile with
-.B "mcp" : false
+A gateway grants only what it lists.
+.PP
+A model is a member of
+.BR models ,
+keyed by the name typed after
+.BR \-p .
+Every member is optional.
+.B id
+is the name sent to the API and defaults to the key.
+.BR temperature ,
+.BR max_tokens ,
+.B timeout
+and
+.B system_prompt
+override the gateway's.
+.BR tools
+and
+.B mcp_servers
+may list a subset of the gateway's; leaving one out inherits all of them and
+.B []
+means none.
+.B allow_danger
+may only be
+.BR false .
+Listing anything the gateway does not grant is a configuration error, not
+something ignored.
+.PP
+The whole file is checked on every run, so an error in a gateway that is not
+being used is still reported.
+Unknown or retired keys (including
+.BR mcp ,
+.B backend
+and a boolean
+.BR tools ),
+repeated names, a gateway with no models, and a
+.B default_model
+that is not one of its models are errors too.
+.PP
+.B tools
+is a ceiling, not a switch: the tool is offered to the model only when the
+matching flag is given, and a flag the model's
+.B tools
+lack is refused with an error (exit 2) rather than silently ignored.
+Local tools and MCP servers are independent: a model with
+.B "mcp_servers" : []
 can still use
 .BR \-r .
 .PP
@@ -301,6 +371,12 @@ the gateway also tried to run
 own local tools, which it cannot, and told the model they had failed when they
 had not.
 MCP and local tool calls together are limited to 20 rounds.
+.PP
+The system prompt is the built-in instruction, then the top-level
+.BR system_prompt ,
+the gateway's, the model's, and
+.BR \-s ,
+skipping any that are empty.
 .SH FILES
 .TP
 .I ~/.config/qq/config.json
@@ -322,10 +398,11 @@ If set to an absolute path, the configuration file is
 Reported by
 .BR \-c .
 .PP
-API keys are read from the environment variable named by a profile's
+API keys are read from the environment variable named by a gateway's
 .BR api_key_env .
-They are never stored in the configuration file. A profile that names a
-variable which is unset or empty is a configuration error; omit
+They are never stored in the configuration file. A gateway that names a
+variable which is unset or empty is a configuration error when one of its
+models is used; omit
 .B api_key_env
 for an endpoint that needs no key.
 .SH EXIT STATUS
@@ -345,8 +422,8 @@ git diff | qq summarize this change
 qq \-c how do I list files by size
 qq \-r what does the debug target in the Makefile do
 qq \-rw add a clean target to the Makefile
-qq \-p litellm \-m nemotron\-3\-super \-s "Reply in French." say hello
-qq \-d litellm
+qq \-p litellm/nemotron \-s "Reply in French." say hello
+qq \-d litellm/nemotron
 qq \-l
 .fi
 .SH SEE ALSO

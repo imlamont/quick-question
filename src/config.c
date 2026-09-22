@@ -1,6 +1,7 @@
 #include "config.h"
 #include "buf.h"
 #include "qq.h"
+#include "tools.h"
 
 #include <cjson/cJSON.h>
 #include <errno.h>
@@ -76,6 +77,287 @@ char *config_path(void)
 	return buf_steal(&b);
 }
 
+/* What a gateway or a model may say about how it is used. Unset is NAN, 0 or
+ * NULL, so a model's own value can be told from "inherit". */
+struct tuning {
+	const char *system_prompt;
+	double temperature;
+	int max_tokens;
+	long timeout;
+};
+
+/* A gateway's settings, checked, for its models to inherit. */
+struct gateway {
+	const char *name;
+	const char *endpoint;
+	const char *api_key_env;
+	struct tuning tune;
+	int tools;                /* TOOLS_* mask it grants */
+	const cJSON *mcp_servers; /* NULL when it lists none */
+	int allow_danger;
+	const cJSON *models;
+};
+
+static const char *const gateway_keys[] = {
+	"endpoint", "api_key_env", "default_model", "system_prompt", "temperature",
+	"max_tokens", "timeout", "tools", "mcp_servers", "allow_danger", "models", NULL
+};
+static const char *const model_keys[] = {
+	"id", "system_prompt", "temperature", "max_tokens", "timeout", "tools",
+	"mcp_servers", "allow_danger", NULL
+};
+
+static const struct { const char *name; int flag; } categories[] = {
+	{ "read", TOOLS_READ }, { "write", TOOLS_WRITE }, { "exec", TOOLS_EXEC },
+};
+#define NCATEGORIES (sizeof categories / sizeof *categories)
+
+/* Unknown keys are errors: a misspelt or retired "tools" or "mcp" that was
+ * silently ignored would leave a model with more access than its config says. */
+static int check_keys(const cJSON *obj, const char *const *allowed, const char *where,
+		      char *err, size_t errlen)
+{
+	const cJSON *it;
+
+	cJSON_ArrayForEach(it, obj) {
+		int known = 0;
+
+		for (const char *const *k = allowed; *k; k++)
+			known |= !strcmp(it->string, *k);
+		if (known)
+			continue;
+		if (!strcmp(it->string, "mcp"))
+			return fail(err, errlen,
+				    "%s\"mcp\" is no longer supported: list \"mcp_servers\", "
+				    "and use [] for none", where);
+		return fail(err, errlen, "%sunknown key \"%s\"", where, it->string);
+	}
+	return 0;
+}
+
+static int get_tuning(const cJSON *obj, struct tuning *t, const char *where,
+		      char *err, size_t errlen)
+{
+	const cJSON *it;
+
+	*t = (struct tuning){ .temperature = NAN };
+	if (get_str(obj, "system_prompt", &t->system_prompt, where, err, errlen))
+		return -1;
+	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "temperature"))) {
+		if (!cJSON_IsNumber(it))
+			return fail(err, errlen, "%s\"temperature\" must be a number", where);
+		t->temperature = it->valuedouble;
+	}
+	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "max_tokens"))) {
+		if (!cJSON_IsNumber(it) || it->valuedouble < 1 || it->valuedouble > INT_MAX)
+			return fail(err, errlen, "%s\"max_tokens\" must be a positive integer", where);
+		t->max_tokens = (int)it->valuedouble;
+	}
+	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "timeout"))) {
+		if (!cJSON_IsNumber(it) || it->valuedouble < 1 || it->valuedouble > QQ_TIMEOUT_MAX)
+			return fail(err, errlen, "%s\"timeout\" must be a number of seconds (1-%d)",
+				    where, QQ_TIMEOUT_MAX);
+		t->timeout = (long)it->valuedouble;
+	}
+	return 0;
+}
+
+/* "tools": an array of read, write and exec. *mask is -1 when the member is
+ * absent, so a model can tell "inherit" from "none". */
+static int get_tools(const cJSON *obj, int *mask, const char *where, char *err, size_t errlen)
+{
+	const cJSON *it = cJSON_GetObjectItemCaseSensitive(obj, "tools"), *s;
+
+	*mask = -1;
+	if (!it || cJSON_IsNull(it))
+		return 0;
+	if (!cJSON_IsArray(it))
+		return fail(err, errlen,
+			    "%s\"tools\" must be an array of \"read\", \"write\" and \"exec\"", where);
+	*mask = 0;
+	cJSON_ArrayForEach(s, it) {
+		int known = 0;
+
+		for (size_t i = 0; cJSON_IsString(s) && i < NCATEGORIES; i++)
+			if (!strcmp(s->valuestring, categories[i].name)) {
+				*mask |= categories[i].flag;
+				known = 1;
+			}
+		if (!known)
+			return fail(err, errlen,
+				    "%s\"tools\" must be an array of \"read\", \"write\" and \"exec\"",
+				    where);
+	}
+	return 0;
+}
+
+/* "mcp_servers": an array of server names, or NULL when absent. An empty array
+ * is returned as such: on a model it means none, not inherit. */
+static int get_servers(const cJSON *obj, const cJSON **out, const char *where,
+		       char *err, size_t errlen)
+{
+	const cJSON *it = cJSON_GetObjectItemCaseSensitive(obj, "mcp_servers"), *s;
+
+	*out = NULL;
+	if (!it || cJSON_IsNull(it))
+		return 0;
+	if (!cJSON_IsArray(it))
+		return fail(err, errlen, "%s\"mcp_servers\" must be an array of server names", where);
+	cJSON_ArrayForEach(s, it)
+		if (!cJSON_IsString(s) || !*s->valuestring)
+			return fail(err, errlen,
+				    "%s\"mcp_servers\" must be an array of server names", where);
+	*out = it;
+	return 0;
+}
+
+/* True if item is the first member of obj with its name. cJSON keeps duplicate
+ * keys but only ever finds the first, so a later one would be dead config. */
+static int first_of_name(const cJSON *obj, const cJSON *item)
+{
+	return cJSON_GetObjectItemCaseSensitive(obj, item->string) == item;
+}
+
+static int parse_gateway(const cJSON *obj, struct gateway *g, char *err, size_t errlen)
+{
+	char where[256];
+
+	*g = (struct gateway){ .name = obj->string };
+	snprintf(where, sizeof where, "gateway \"%s\": ", g->name);
+	if (!*g->name || strchr(g->name, '/'))
+		return fail(err, errlen, "gateway name \"%s\" must not be empty or contain \"/\"",
+			    g->name);
+	if (!cJSON_IsObject(obj))
+		return fail(err, errlen, "%smust be an object", where);
+	if (check_keys(obj, gateway_keys, where, err, errlen) ||
+	    get_str(obj, "endpoint", &g->endpoint, where, err, errlen) ||
+	    get_str(obj, "api_key_env", &g->api_key_env, where, err, errlen) ||
+	    get_tuning(obj, &g->tune, where, err, errlen) ||
+	    get_tools(obj, &g->tools, where, err, errlen) ||
+	    get_servers(obj, &g->mcp_servers, where, err, errlen) ||
+	    get_bool(obj, "allow_danger", &g->allow_danger, where, err, errlen))
+		return -1;
+	if (!g->endpoint)
+		return fail(err, errlen, "%sa gateway requires \"endpoint\"", where);
+	if (g->tools < 0)
+		g->tools = 0; /* a gateway grants only what it lists */
+	if (g->mcp_servers && !cJSON_GetArraySize(g->mcp_servers))
+		g->mcp_servers = NULL;
+	g->models = cJSON_GetObjectItemCaseSensitive(obj, "models");
+	if (!cJSON_IsObject(g->models) || !g->models->child)
+		return fail(err, errlen, "%sa gateway requires a \"models\" object with a model in it",
+			    where);
+	return 0;
+}
+
+/* One model on a checked gateway: its own keys, then what it inherits and what
+ * it may only narrow. */
+static int parse_model(const struct config *c, const struct gateway *g, const cJSON *m,
+		       struct profile *p, char *err, size_t errlen)
+{
+	struct tuning t;
+	const cJSON *servers, *it, *s;
+	const char *id;
+	char where[512];
+	int mask, danger = -1;
+
+	snprintf(where, sizeof where, "model \"%s/%s\": ", g->name, m->string);
+	if (!*m->string)
+		return fail(err, errlen, "gateway \"%s\": a model name must not be empty", g->name);
+	if (!cJSON_IsObject(m))
+		return fail(err, errlen, "%smust be an object", where);
+	if (!first_of_name(g->models, m))
+		return fail(err, errlen, "%sis listed twice", where);
+	if (check_keys(m, model_keys, where, err, errlen) ||
+	    get_str(m, "id", &id, where, err, errlen) ||
+	    get_tuning(m, &t, where, err, errlen) ||
+	    get_tools(m, &mask, where, err, errlen) ||
+	    get_servers(m, &servers, where, err, errlen) ||
+	    get_bool(m, "allow_danger", &danger, where, err, errlen))
+		return -1;
+
+	/* A model may narrow what its gateway grants, never widen it. */
+	for (size_t i = 0; mask >= 0 && i < NCATEGORIES; i++)
+		if ((mask & categories[i].flag) && !(g->tools & categories[i].flag))
+			return fail(err, errlen,
+				    "%s\"tools\" lists \"%s\", which gateway \"%s\" does not allow",
+				    where, categories[i].name, g->name);
+	if (servers)
+		cJSON_ArrayForEach(it, servers) {
+			int granted = 0;
+
+			if (g->mcp_servers)
+				cJSON_ArrayForEach(s, g->mcp_servers)
+					granted |= !strcmp(s->valuestring, it->valuestring);
+			if (!granted)
+				return fail(err, errlen,
+					    "%s\"mcp_servers\" lists \"%s\", which gateway \"%s\" does not allow",
+					    where, it->valuestring, g->name);
+		}
+	if (danger > 0 && !g->allow_danger)
+		return fail(err, errlen, "%s\"allow_danger\" is true, but gateway \"%s\" does not allow it",
+			    where, g->name);
+
+	*p = (struct profile){
+		.gateway = g->name,
+		.name = m->string,
+		.model = id ? id : m->string,
+		.endpoint = g->endpoint,
+		.api_key_env = g->api_key_env,
+		.gateway_prompt = g->tune.system_prompt,
+		.system_prompt = t.system_prompt,
+		.temperature = !isnan(t.temperature) ? t.temperature : g->tune.temperature,
+		.max_tokens = t.max_tokens ? t.max_tokens : g->tune.max_tokens,
+		.timeout = t.timeout ? t.timeout : g->tune.timeout ? g->tune.timeout : c->timeout,
+		.tools = mask >= 0 ? mask : g->tools,
+		.allow_danger = danger >= 0 ? danger : g->allow_danger,
+		.mcp_servers = servers ? servers : g->mcp_servers,
+	};
+	if (p->mcp_servers && !cJSON_GetArraySize(p->mcp_servers))
+		p->mcp_servers = NULL;
+	return 0;
+}
+
+/* The model a gateway uses when only the gateway is named. Only for a gateway
+ * that has been checked, so "default_model" is a string naming a real model. */
+static const cJSON *default_model(const cJSON *gateway)
+{
+	const cJSON *models = cJSON_GetObjectItemCaseSensitive(gateway, "models");
+	const cJSON *name = cJSON_GetObjectItemCaseSensitive(gateway, "default_model");
+
+	if (cJSON_IsString(name) && *name->valuestring)
+		return cJSON_GetObjectItemCaseSensitive(models, name->valuestring);
+	return models->child;
+}
+
+/* Everything that can be wrong with the file itself, so a mistake in a gateway
+ * that isn't being used is still reported. API keys are left for the selected
+ * model: not every gateway's key has to be exported at once. */
+static int validate(const struct config *c, char *err, size_t errlen)
+{
+	const cJSON *gateways = cJSON_GetObjectItemCaseSensitive(c->root, "gateways"), *g, *m;
+	struct gateway gw;
+	struct profile p;
+
+	cJSON_ArrayForEach(g, gateways) {
+		const cJSON *dm = cJSON_GetObjectItemCaseSensitive(g, "default_model");
+
+		if (!first_of_name(gateways, g))
+			return fail(err, errlen, "gateway \"%s\" is listed twice", g->string);
+		if (parse_gateway(g, &gw, err, errlen))
+			return -1;
+		if (dm && !cJSON_IsNull(dm) &&
+		    (!cJSON_IsString(dm) || !cJSON_GetObjectItemCaseSensitive(gw.models, dm->valuestring)))
+			return fail(err, errlen,
+				    "gateway \"%s\": \"default_model\" must name one of its models",
+				    g->string);
+		cJSON_ArrayForEach(m, gw.models)
+			if (parse_model(c, &gw, m, &p, err, errlen))
+				return -1;
+	}
+	return 0;
+}
+
 int config_parse(struct config *c, const char *json, size_t len, char *err, size_t errlen)
 {
 	const cJSON *it;
@@ -92,7 +374,7 @@ int config_parse(struct config *c, const char *json, size_t len, char *err, size
 	}
 	if (!cJSON_IsObject(c->root))
 		return fail(err, errlen, "config must be a JSON object");
-	if (get_str(c->root, "default", &c->default_profile, "", err, errlen) ||
+	if (get_str(c->root, "default", &c->default_sel, "", err, errlen) ||
 	    get_str(c->root, "system_prompt", &c->system_prompt, "", err, errlen))
 		return -1;
 
@@ -105,9 +387,14 @@ int config_parse(struct config *c, const char *json, size_t len, char *err, size
 		c->timeout = (long)it->valuedouble;
 	}
 
-	if (!cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(c->root, "profiles")))
-		return fail(err, errlen, "config needs a \"profiles\" object");
-	return 0;
+	if (cJSON_GetObjectItemCaseSensitive(c->root, "profiles"))
+		return fail(err, errlen,
+			    "\"profiles\" is no longer supported: put each endpoint in a "
+			    "\"gateways\" entry and list its models under \"models\" "
+			    "(see config.example.json)");
+	if (!cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(c->root, "gateways")))
+		return fail(err, errlen, "config needs a \"gateways\" object");
+	return validate(c, err, errlen);
 }
 
 int config_load(struct config *c, const char *path, char *err, size_t errlen)
@@ -140,50 +427,97 @@ int config_load(struct config *c, const char *path, char *err, size_t errlen)
 	return 0;
 }
 
-int config_profile(const struct config *c, const char *name, struct profile *p,
-		   char *err, size_t errlen)
+/* "gateway/model" for every model, in config order. */
+static void qualified_names(const struct config *c, struct buf *out)
 {
-	const cJSON *profiles = cJSON_GetObjectItemCaseSensitive(c->root, "profiles");
-	const cJSON *obj, *it;
-	const char *backend;
-	char where[128];
+	const cJSON *g, *m;
 
-	if (!name)
-		name = c->default_profile;
-	if (!name)
-		return fail(err, errlen, "no profile selected: use -p, or set a default with -d");
+	cJSON_ArrayForEach(g, cJSON_GetObjectItemCaseSensitive(c->root, "gateways"))
+		cJSON_ArrayForEach(m, cJSON_GetObjectItemCaseSensitive(g, "models"))
+			buf_appendf(out, "%s%s/%s", out->len ? ", " : "", g->string, m->string);
+}
 
-	obj = cJSON_GetObjectItemCaseSensitive(profiles, name);
-	if (!cJSON_IsObject(obj)) {
-		struct buf names = {0};
+/* Find the gateway and model a selection names. The config has been validated,
+ * so every gateway has models. */
+static int select_model(const struct config *c, const char *sel, const cJSON **gw,
+			const cJSON **model, char *err, size_t errlen)
+{
+	const cJSON *gateways = cJSON_GetObjectItemCaseSensitive(c->root, "gateways"), *g, *m;
+	const char *slash = strchr(sel, '/');
+	struct buf names = {0};
+	int found = 0;
 
-		cJSON_ArrayForEach(it, profiles)
-			if (cJSON_IsObject(it))
-				buf_appendf(&names, "%s%s", names.len ? ", " : "", it->string);
-		fail(err, errlen, "unknown profile \"%s\" (available: %s)", name,
-		     names.data ? names.data : "none");
+	/* "gateway/model": the "/" only counts after a real gateway name, so a model
+	 * id like "meta/llama-3" is left alone unless a gateway is called "meta". */
+	if (slash)
+		cJSON_ArrayForEach(g, gateways) {
+			size_t n = strlen(g->string);
+
+			if ((size_t)(slash - sel) != n || strncmp(sel, g->string, n))
+				continue;
+			m = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(g, "models"),
+							     slash + 1);
+			if (!m) {
+				cJSON_ArrayForEach(m, cJSON_GetObjectItemCaseSensitive(g, "models"))
+					buf_appendf(&names, "%s%s", names.len ? ", " : "", m->string);
+				fail(err, errlen, "gateway \"%s\" has no model \"%s\" (models: %s)",
+				     g->string, slash + 1, names.data);
+				buf_free(&names);
+				return -1;
+			}
+			*gw = g;
+			*model = m;
+			return 0;
+		}
+
+	/* Otherwise a bare model name, or a gateway name standing for its default
+	 * model. Every way of reading it counts, so a clash is reported, not guessed. */
+	cJSON_ArrayForEach(g, gateways) {
+		const cJSON *hit[2];
+
+		hit[0] = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(g, "models"), sel);
+		hit[1] = !strcmp(g->string, sel) ? default_model(g) : NULL;
+		if (hit[1] == hit[0]) /* the gateway's default is the model of that name */
+			hit[1] = NULL;
+		for (int i = 0; i < 2; i++) {
+			if (!hit[i])
+				continue;
+			if (!found++) {
+				*gw = g;
+				*model = hit[i];
+			}
+			buf_appendf(&names, "%s%s/%s", names.len ? ", " : "", g->string, hit[i]->string);
+		}
+	}
+	if (found == 1) {
+		buf_free(&names);
+		return 0;
+	}
+	if (found > 1) {
+		fail(err, errlen, "\"%s\" is ambiguous; use gateway/model: %s", sel, names.data);
 		buf_free(&names);
 		return -1;
 	}
+	qualified_names(c, &names);
+	fail(err, errlen, "unknown model or gateway \"%s\" (available: %s)", sel,
+	     names.data ? names.data : "none");
+	buf_free(&names);
+	return -1;
+}
 
-	*p = (struct profile){ .name = obj->string, .temperature = NAN, .tools = 1, .mcp = 1 };
-	snprintf(where, sizeof where, "profile \"%s\": ", name);
-	if (get_str(obj, "backend", &backend, where, err, errlen) ||
-	    get_str(obj, "endpoint", &p->endpoint, where, err, errlen) ||
-	    get_str(obj, "model", &p->model, where, err, errlen) ||
-	    get_str(obj, "api_key_env", &p->api_key_env, where, err, errlen) ||
-	    get_str(obj, "system_prompt", &p->system_prompt, where, err, errlen) ||
-	    get_bool(obj, "tools", &p->tools, where, err, errlen) ||
-	    get_bool(obj, "mcp", &p->mcp, where, err, errlen) ||
-	    get_bool(obj, "allow_danger", &p->allow_danger, where, err, errlen))
+int config_profile(const struct config *c, const char *sel, struct profile *p,
+		   char *err, size_t errlen)
+{
+	const cJSON *gw, *m;
+	struct gateway g;
+
+	if (!sel)
+		sel = c->default_sel;
+	if (!sel)
+		return fail(err, errlen, "no model selected: use -p, or set a default with -d");
+	if (select_model(c, sel, &gw, &m, err, errlen) ||
+	    parse_gateway(gw, &g, err, errlen) || parse_model(c, &g, m, p, err, errlen))
 		return -1;
-
-	/* "backend" is optional: OpenAI-compatible endpoints are the only kind. */
-	if (backend && strcmp(backend, "openai"))
-		return fail(err, errlen, "%sunknown backend \"%s\" (only openai is supported)",
-			    where, backend);
-	if (!p->endpoint || !p->model)
-		return fail(err, errlen, "%sa profile requires \"endpoint\" and \"model\"", where);
 
 	/* "api_key_env" is a variable name, not the key. Catch the mix-up here:
 	 * otherwise no Authorization header goes out and the endpoint's reply to
@@ -193,32 +527,8 @@ int config_profile(const struct config *c, const char *name, struct profile *p,
 
 		if (!key || !*key)
 			return fail(err, errlen,
-				    "%s\"api_key_env\" names environment variable %s, which is %s",
-				    where, p->api_key_env, key ? "empty" : "not set");
-	}
-
-	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "temperature"))) {
-		if (!cJSON_IsNumber(it))
-			return fail(err, errlen, "%s\"temperature\" must be a number", where);
-		p->temperature = it->valuedouble;
-	}
-	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "max_tokens"))) {
-		if (!cJSON_IsNumber(it) || it->valuedouble < 1 || it->valuedouble > INT_MAX)
-			return fail(err, errlen, "%s\"max_tokens\" must be a positive integer", where);
-		p->max_tokens = (int)it->valuedouble;
-	}
-	if ((it = cJSON_GetObjectItemCaseSensitive(obj, "mcp_servers"))) {
-		const cJSON *s;
-
-		if (!cJSON_IsArray(it))
-			return fail(err, errlen, "%s\"mcp_servers\" must be an array of server names",
-				    where);
-		cJSON_ArrayForEach(s, it)
-			if (!cJSON_IsString(s) || !*s->valuestring)
-				return fail(err, errlen,
-					    "%s\"mcp_servers\" must be an array of server names", where);
-		if (cJSON_GetArraySize(it) > 0 && p->mcp)
-			p->mcp_servers = it;
+				    "gateway \"%s\": \"api_key_env\" names environment variable %s, which is %s",
+				    p->gateway, p->api_key_env, key ? "empty" : "not set");
 	}
 	return 0;
 }
@@ -239,25 +549,73 @@ static int write_all(int fd, const char *s, size_t n)
 	return 0;
 }
 
-void config_list(const struct config *c, const char *active, struct buf *out)
+static void join_tools(int mask, struct buf *out)
 {
-	const cJSON *profiles = cJSON_GetObjectItemCaseSensitive(c->root, "profiles");
-	const cJSON *it;
+	for (size_t i = 0; i < NCATEGORIES; i++)
+		if (mask & categories[i].flag)
+			buf_appendf(out, "%s%s", out->len ? "," : "", categories[i].name);
+	if (!out->len)
+		buf_puts(out, "none");
+}
 
-	if (!active)
-		active = c->default_profile;
-	cJSON_ArrayForEach(it, profiles)
-		if (cJSON_IsObject(it))
-			buf_appendf(out, "%s%s\n",
-				    active && !strcmp(it->string, active) ? "* " : "  ",
-				    it->string);
+static void join_servers(const cJSON *list, struct buf *out)
+{
+	const cJSON *s;
+
+	cJSON_ArrayForEach(s, list)
+		buf_appendf(out, "%s%s", out->len ? "," : "", s->valuestring);
+	if (!out->len)
+		buf_puts(out, "none");
+}
+
+void config_list(const struct config *c, const char *sel, struct buf *out)
+{
+	const cJSON *gateways = cJSON_GetObjectItemCaseSensitive(c->root, "gateways"), *g, *m;
+	const cJSON *active_g = NULL, *active_m = NULL;
+	char scratch[256];
+	size_t width = 0;
+
+	if (!sel)
+		sel = c->default_sel;
+	if (sel && select_model(c, sel, &active_g, &active_m, scratch, sizeof scratch))
+		active_g = active_m = NULL;
+
+	cJSON_ArrayForEach(g, gateways)
+		cJSON_ArrayForEach(m, cJSON_GetObjectItemCaseSensitive(g, "models")) {
+			size_t n = strlen(g->string) + 1 + strlen(m->string);
+
+			width = n > width ? n : width;
+		}
+
+	cJSON_ArrayForEach(g, gateways) {
+		struct gateway gw;
+
+		if (parse_gateway(g, &gw, scratch, sizeof scratch))
+			continue;
+		cJSON_ArrayForEach(m, gw.models) {
+			struct profile p;
+			struct buf name = {0}, tools = {0}, mcp = {0};
+
+			if (parse_model(c, &gw, m, &p, scratch, sizeof scratch))
+				continue;
+			buf_appendf(&name, "%s/%s", g->string, m->string);
+			join_tools(p.tools, &tools);
+			join_servers(p.mcp_servers, &mcp);
+			buf_appendf(out, "%s%-*s  tools=%s  mcp=%s  danger=%s\n",
+				    g == active_g && m == active_m ? "* " : "  ", (int)width,
+				    name.data, tools.data, mcp.data, p.allow_danger ? "yes" : "no");
+			buf_free(&name);
+			buf_free(&tools);
+			buf_free(&mcp);
+		}
+	}
 }
 
 int config_set_default(struct config *c, const char *path, const char *name,
 		       char *err, size_t errlen)
 {
 	struct profile p;
-	struct buf tmp = {0};
+	struct buf tmp = {0}, qual = {0};
 	struct stat st;
 	cJSON *item;
 	char *json = NULL, *real = NULL, *dir = NULL;
@@ -266,7 +624,8 @@ int config_set_default(struct config *c, const char *path, const char *name,
 	if (config_profile(c, name, &p, err, errlen))
 		return -1;
 
-	if (!(item = cJSON_CreateString(name))) {
+	buf_appendf(&qual, "%s/%s", p.gateway, p.name);
+	if (!(item = cJSON_CreateString(qual.data))) {
 		fail(err, errlen, "out of memory");
 		goto out;
 	}
@@ -280,7 +639,7 @@ int config_set_default(struct config *c, const char *path, const char *name,
 		fail(err, errlen, "out of memory");
 		goto out;
 	}
-	c->default_profile = item->valuestring;
+	c->default_sel = item->valuestring;
 
 	/* Write next to the real file (following symlinks), then rename over it. */
 	if (!(real = realpath(path, NULL)) || stat(real, &st)) {
@@ -319,6 +678,7 @@ out:
 	if (rc && created)
 		unlink(tmp.data);
 	buf_free(&tmp);
+	buf_free(&qual);
 	cJSON_free(json);
 	free(real);
 	free(dir);
