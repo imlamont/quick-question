@@ -1,3 +1,24 @@
+quick-question (0.4.0-1) resolute; urgency=medium
+
+  * New upstream release:
+    - config replaces flat "profiles" with "gateways" that each list
+      the "models" available on them; a gateway caps tool categories
+      (read/write/exec), MCP servers and allow_danger, which a model
+      may only narrow, never widen; selection is by [gateway/]model
+      (-p), with ambiguous bare names refused
+    - -y does every tool call without asking
+    - -L writes a timestamped debug log of the whole exchange, with
+      the command line as its first entry
+    - a repeated tool call, including MCP calls, is answered from
+      history instead of asking again or resending the search
+    - the MCP gateway no longer runs qq's own tools, and "tools"/"mcp"
+      are recognized
+    - api_key_env now fails fast when it names an unset variable, and
+      -l lists profiles
+    - covers 0.3.0, which was not separately packaged
+
+ -- Ian Lamont <imlamont@comcast.net>  Tue, 22 Sep 2026 12:00:00 +0000
+
 quick-question (0.2.0-1) resolute; urgency=medium
 
   * New upstream release:
