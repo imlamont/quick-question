@@ -2,3 +2,6 @@
 /build/
 /qq
 *.o
+
+# perf test output (raw samples, machine-specific)
+/tests/perf/results/

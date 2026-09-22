@@ -1,5 +1,6 @@
 #include "mcp.h"
 #include "buf.h"
+#include "log.h"
 
 #include <cjson/cJSON.h>
 #include <stdio.h>
@@ -19,7 +20,12 @@ void mcp_add_tools(cJSON *req, const cJSON *servers)
 		cJSON_AddStringToObject(t, "type", "mcp");
 		cJSON_AddStringToObject(t, "server_label", s->valuestring);
 		cJSON_AddStringToObject(t, "server_url", url.data);
-		cJSON_AddStringToObject(t, "require_approval", "never");
+		/* "always" means the gateway hands every tool call back instead of
+		 * running any itself. With "never" it ran them, including qq's own
+		 * -r/-w/-x functions, which it cannot run: the model was told
+		 * "Error executing tool: 'write_file'" for a call qq went on to
+		 * carry out, and reasoned from that phantom failure. */
+		cJSON_AddStringToObject(t, "require_approval", "always");
 		cJSON_AddItemToArray(tools, t);
 		buf_free(&url);
 	}
@@ -109,8 +115,10 @@ char *mcp_call(struct http *c, const char *url, const cJSON *servers, const cJSO
 	if (!cJSON_IsString(name) || !(server = mcp_match(servers, name->valuestring, &tool))) {
 		buf_appendf(&out, "error: unknown tool \"%s\"",
 			    cJSON_IsString(name) ? name->valuestring : "(unnamed)");
+		log_printf("mcp-result %s", out.data);
 		return buf_steal(&out);
 	}
+	log_printf("mcp-call server=%s tool=%s via %s", server, tool, url);
 
 	/* Arguments normally arrive JSON-encoded in a string; "" means none. */
 	if (cJSON_IsString(args))
@@ -120,6 +128,7 @@ char *mcp_call(struct http *c, const char *url, const cJSON *servers, const cJSO
 	if (!cJSON_IsObject(arguments)) {
 		cJSON_Delete(arguments);
 		buf_puts(&out, "error: tool arguments are not a JSON object");
+		log_printf("mcp-result %s", out.data);
 		return buf_steal(&out);
 	}
 
@@ -144,5 +153,11 @@ char *mcp_call(struct http *c, const char *url, const cJSON *servers, const cJSO
 	cJSON_Delete(req);
 	cJSON_Delete(res);
 	buf_free(&resp);
+	if (log_on()) {
+		char *shown = log_escape(out.data, out.len);
+
+		log_printf("mcp-result %s %s", name->valuestring, shown);
+		free(shown);
+	}
 	return buf_steal(&out);
 }

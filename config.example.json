@@ -1,19 +1,31 @@
 {
-  "default": "ollama",
+  "default": "ollama/hermes3",
   "system_prompt": "Answer concisely in plain text.",
   "timeout": 120,
-  "profiles": {
+  "gateways": {
     "ollama": {
       "endpoint": "http://localhost:11434/v1",
-      "model": "hermes3",
-      "temperature": 0.2
+      "models": {
+        "hermes3": { "id": "hermes3:latest", "temperature": 0.2 }
+      }
     },
     "litellm": {
-      "backend": "openai",
       "endpoint": "http://localhost:4000",
-      "model": "nemotron-3.5-lightning",
       "api_key_env": "LITELLM_API_KEY",
-      "mcp_servers": ["searxng_mcp"]
+      "default_model": "nemotron",
+      "tools": ["read", "write"],
+      "mcp_servers": ["searxng_mcp", "files_mcp"],
+      "models": {
+        "nemotron": {
+          "id": "nemotron-3.5-lightning",
+          "mcp_servers": ["searxng_mcp"]
+        },
+        "readonly": {
+          "id": "nemotron-3.5-lightning",
+          "tools": ["read"],
+          "mcp_servers": []
+        }
+      }
     }
   }
 }

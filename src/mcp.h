@@ -3,7 +3,7 @@
 
 /* Tool calling through a LiteLLM proxy's MCP gateway.
  *
- * A profile's "mcp_servers" are offered to the model as {"type": "mcp"} tools.
+ * A model's effective "mcp_servers" are offered to the model as {"type": "mcp"} tools.
  * The proxy runs the first round of tool calls itself and hands any further
  * ones back; qq runs those via POST /mcp-rest/tools/call. The model sees tools
  * as "<server>-<tool>", which is how a call is mapped back to its server. */

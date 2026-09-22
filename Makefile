@@ -14,8 +14,8 @@ CFLAGS   = -O0 -g -fno-omit-frame-pointer -fsanitize=address,undefined
 LDFLAGS += -fsanitize=address,undefined
 endif
 
-OBJ = $(B)/buf.o $(B)/config.o $(B)/prompt.o $(B)/proc.o $(B)/http.o $(B)/mcp.o \
-      $(B)/tools.o $(B)/openai.o
+OBJ = $(B)/buf.o $(B)/config.o $(B)/log.o $(B)/prompt.o $(B)/proc.o $(B)/http.o \
+      $(B)/mcp.o $(B)/tools.o $(B)/openai.o
 HDR = $(wildcard src/*.h)
 
 all: $(BIN)

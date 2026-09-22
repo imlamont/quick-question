@@ -1,4 +1,5 @@
 #include "tools.h"
+#include "log.h"
 #include "proc.h"
 
 #include <cjson/cJSON.h>
@@ -220,6 +221,13 @@ static void note(const char *name, const char *arg)
  * unattended run would wait for an answer forever. */
 #define APPROVAL_TIMEOUT_MS (120 * 1000)
 
+static int skip_approval;
+
+void tools_skip_approval(void)
+{
+	skip_approval = 1;
+}
+
 int tools_read_answer(int fd, long long timeout_ms)
 {
 	struct pollfd pfd = { .fd = fd, .events = POLLIN };
@@ -250,29 +258,45 @@ int tools_read_answer(int fd, long long timeout_ms)
  * to ask. The time spent waiting is added to *waited_ms. */
 static int confirm(const char *question, long long *waited_ms)
 {
-	long long start = proc_now_ms();
-	int fd = open("/dev/tty", O_RDWR | O_CLOEXEC), r;
+	long long start = proc_now_ms(), spent;
+	int fd, r;
 
-	if (fd < 0)
+	/* -y: still shown, just not asked, so the terminal and the log both keep
+	 * a record of what was allowed on the user's behalf. */
+	if (skip_approval) {
+		fprintf(stderr, "\n%s\nAllowed by -y.\n", question);
+		log_printf("approval yes by -y");
+		return TOOLS_ANSWER_YES;
+	}
+	fd = open("/dev/tty", O_RDWR | O_CLOEXEC);
+	if (fd < 0) {
+		log_printf("approval no-terminal");
 		return -1;
+	}
 	dprintf(fd, "\n%s\nAllow? [y/N] ", question);
 	r = tools_read_answer(fd, APPROVAL_TIMEOUT_MS);
 	if (r == TOOLS_ANSWER_TIMEOUT)
 		dprintf(fd, "\nqq: no answer after %d seconds, so this was not done\n",
 			APPROVAL_TIMEOUT_MS / 1000);
 	close(fd);
-	*waited_ms += proc_now_ms() - start;
+	spent = proc_now_ms() - start;
+	*waited_ms += spent;
+	log_printf("approval %s after %lldms",
+		   r == TOOLS_ANSWER_YES ? "yes" : r == TOOLS_ANSWER_TIMEOUT ? "timeout" : "no",
+		   spent);
 	return r;
 }
 
-/* Ask the question in q (then freed). On refusal, explain why in out. */
-static int allowed(struct buf *q, long long *waited_ms, struct buf *out)
+/* Ask the question in q (then freed). On refusal, explain why in out and set
+ * *refused, which tells the caller not to ask this again. */
+static int allowed(struct buf *q, long long *waited_ms, struct buf *out, int *refused)
 {
 	int r = confirm(q->data, waited_ms);
 
 	buf_free(q);
 	if (r == TOOLS_ANSWER_YES)
 		return 1;
+	*refused = 1;
 	if (r == TOOLS_ANSWER_TIMEOUT)
 		buf_appendf(out, "error: not done: the user did not answer within %d seconds",
 			    APPROVAL_TIMEOUT_MS / 1000);
@@ -512,7 +536,7 @@ static const char *arg_str(const cJSON *args, const char *key)
 }
 
 static void write_file(const char *path, const cJSON *args, long long *waited_ms,
-		       struct buf *out)
+		       struct buf *out, int *refused)
 {
 	const char *content = arg_str(args, "content");
 	struct buf q = {0};
@@ -527,7 +551,7 @@ static void write_file(const char *path, const cJSON *args, long long *waited_ms
 	buf_appendf(&q, " (%zu bytes%s):\n", strlen(content),
 		    stat(path, &st) ? "" : ", replacing the existing file");
 	append_preview(&q, content, PREVIEW_MAX, 1);
-	if (!allowed(&q, waited_ms, out))
+	if (!allowed(&q, waited_ms, out, refused))
 		return;
 	note("write_file", path);
 	if (!save(path, content, strlen(content), out))
@@ -535,7 +559,7 @@ static void write_file(const char *path, const cJSON *args, long long *waited_ms
 }
 
 static void edit_file(const char *path, const cJSON *args, long long *waited_ms,
-		      struct buf *out)
+		      struct buf *out, int *refused)
 {
 	const char *old_text = arg_str(args, "old_text"), *new_text = arg_str(args, "new_text");
 	struct buf data = {0}, q = {0};
@@ -564,7 +588,7 @@ static void edit_file(const char *path, const cJSON *args, long long *waited_ms,
 	append_preview(&q, old_text, PREVIEW_MAX, 1);
 	buf_puts(&q, "\nwith:\n");
 	append_preview(&q, new_text, PREVIEW_MAX, 1);
-	if (!allowed(&q, waited_ms, out))
+	if (!allowed(&q, waited_ms, out, refused))
 		goto done;
 	note("edit_file", path);
 	if (!save(path, edited, strlen(edited), out))
@@ -575,7 +599,7 @@ done:
 }
 
 char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
-		 long long *waited_ms)
+		 long long *waited_ms, int *refused)
 {
 	const cJSON *fn = cJSON_GetObjectItemCaseSensitive(tool_call, "function");
 	const cJSON *name_item = cJSON_GetObjectItemCaseSensitive(fn, "name");
@@ -584,16 +608,24 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 	const char *path, *text;
 	struct buf out = {0}, q = {0};
 	int flag = tools_flag(name);
-	cJSON *args;
+	cJSON *args = NULL;
+	char *shown;
 
+	*refused = 0;
+	if (log_on()) {
+		shown = log_escape(cJSON_IsString(raw) ? raw->valuestring : "", cJSON_IsString(raw) ?
+				   strlen(raw->valuestring) : 0);
+		log_printf("tool-call %s %s", name, shown);
+		free(shown);
+	}
 	if (!flag) {
 		buf_appendf(&out, "error: unknown tool \"%s\"", name);
-		return buf_steal(&out);
+		goto done;
 	}
 	if (!(enabled & flag)) {
 		buf_appendf(&out, "error: %s is not enabled; the user can allow it by running qq with -%c",
 			    name, flag_letter(flag));
-		return buf_steal(&out);
+		goto done;
 	}
 
 	/* Arguments normally arrive JSON-encoded in a string; "" means none. */
@@ -602,9 +634,8 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 	else
 		args = cJSON_Duplicate(raw, 1);
 	if (!cJSON_IsObject(args)) {
-		cJSON_Delete(args);
 		buf_puts(&out, "error: tool arguments are not a JSON object");
-		return buf_steal(&out);
+		goto done;
 	}
 
 	if (!strcmp(name, "run_command")) {
@@ -613,7 +644,7 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 		} else {
 			buf_puts(&q, "qq: the model wants to run a command:\n$ ");
 			append_preview(&q, text, PREVIEW_MAX, 1);
-			if (allowed(&q, waited_ms, &out)) {
+			if (allowed(&q, waited_ms, &out, refused)) {
 				note("run_command", text);
 				run_command(text, deadline_ms + *waited_ms, &out);
 			}
@@ -621,15 +652,19 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 		goto done;
 	}
 
+	/* An empty string is no path: models send one, and it used to reach the
+	 * tool as a path of its own, failing as "cannot list :". */
 	path = arg_str(args, "path");
+	if (path && !*path)
+		path = NULL;
 	if (!path && (!strcmp(name, "list_directory") || !strcmp(name, "search_files")))
 		path = ".";
 	if (!path) {
 		buf_puts(&out, "error: missing \"path\" argument");
 	} else if (!strcmp(name, "write_file")) {
-		write_file(path, args, waited_ms, &out);
+		write_file(path, args, waited_ms, &out, refused);
 	} else if (!strcmp(name, "edit_file")) {
-		edit_file(path, args, waited_ms, &out);
+		edit_file(path, args, waited_ms, &out, refused);
 	} else {
 		text = arg_str(args, "pattern");
 		if (!strcmp(name, "search_files") && (!text || !*text)) {
@@ -640,7 +675,7 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 			buf_appendf(&q, "qq: the model wants to use %s outside the current directory:\n",
 				    name);
 			append_preview(&q, path, 300, 0);
-			if (!allowed(&q, waited_ms, &out))
+			if (!allowed(&q, waited_ms, &out, refused))
 				goto done;
 		}
 		note(name, path);
@@ -654,5 +689,10 @@ char *tools_call(const cJSON *tool_call, int enabled, long long deadline_ms,
 done:
 	cJSON_Delete(args);
 	buf_free(&q);
+	if (log_on()) {
+		shown = log_escape(out.data, out.len);
+		log_printf("tool-result %s %s", name, shown);
+		free(shown);
+	}
 	return buf_steal(&out);
 }

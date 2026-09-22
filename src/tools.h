@@ -27,6 +27,14 @@ void tools_describe(struct buf *out, int enabled);
 /* The TOOLS_* flag that enables tool name, or 0 if it isn't a local tool. */
 int tools_flag(const char *name);
 
+/* Answer every approval prompt with yes, showing it on stderr instead of
+ * asking. This is what -y does, and qq.c calls it only after checking that the
+ * gateway has "allow_danger": true. Nothing else may call it: it is the one
+ * route by which a write, an edit or a command happens unapproved, and it works
+ * with no terminal at all, so a run in a script or a cron job is no longer
+ * stopped by the absence of one. */
+void tools_skip_approval(void);
+
 enum { TOOLS_ANSWER_NO = 0, TOOLS_ANSWER_YES = 1, TOOLS_ANSWER_TIMEOUT = -2 };
 
 /* Read one y/N answer from fd, waiting at most timeout_ms. End of input counts
@@ -35,10 +43,12 @@ int tools_read_answer(int fd, long long timeout_ms);
 
 /* Run one assistant tool_call for a local tool. Time spent waiting for the
  * user's approval is added to *waited_ms; commands are killed at deadline_ms
- * plus that time. Always returns malloc'd text for the tool message, starting
+ * plus that time. *refused is set when an approval prompt was answered no,
+ * timed out, or could not be shown, so the caller can reuse that answer rather
+ * than ask again. Always returns malloc'd text for the tool message, starting
  * with "error: " when nothing was done. */
 char *tools_call(const struct cJSON *tool_call, int enabled, long long deadline_ms,
-		 long long *waited_ms);
+		 long long *waited_ms, int *refused);
 
 /* 1 if path resolves inside the working directory, following symlinks. A path
  * that doesn't exist yet is judged by its parent directory. */
